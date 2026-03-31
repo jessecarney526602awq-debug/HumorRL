@@ -12,6 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+import db
 from contract import (
     CONTENT_TYPE_LABELS,
     PROMPT_PATHS,
@@ -87,8 +88,16 @@ def _default_score(reasoning: str) -> ScoreResult:
 # ─────────────────────────────────────────
 
 def generate(req: GenerationRequest) -> list[str]:
-    """MiniMax 生成 req.n 条内容，返回文本列表。"""
-    prompt = _read_prompt(PROMPT_PATHS[req.content_type])
+    """MiniMax 生成 req.n 条内容。优先使用进化后的最优 Prompt 变体。"""
+    try:
+        variants = db.get_active_variants(req.content_type.value)
+        if variants and variants[0]["uses"] >= 5:
+            prompt = variants[0]["prompt_text"]
+        else:
+            prompt = _read_prompt(PROMPT_PATHS[req.content_type])
+    except Exception:
+        prompt = _read_prompt(PROMPT_PATHS[req.content_type])
+
     persona_block = ""
     if req.persona is not None:
         persona_block = f"你的角色设定：\n{req.persona.style_prompt}"
@@ -106,22 +115,22 @@ def generate(req: GenerationRequest) -> list[str]:
 
 
 def score(text: str, content_type: ContentType) -> ScoreResult:
-    """MiniMax 对一条内容进行 6 维评分，返回 ScoreResult。"""
+    """MiniMax 对一条内容进行 6 维评分，返回 ScoreResult。
+    评分用轻量模型（MINIMAX_SCORE_MODEL），默认 MiniMax-Text-01，比推理模型快3-5倍。
+    """
+    import re as _re
     prompt = (
         _read_prompt(SCORE_PROMPT_PATH)
         .replace("{content_type_label}", CONTENT_TYPE_LABELS[content_type])
         .replace("{text}", text)
     )
 
-    model = os.getenv("MINIMAX_MODEL", "MiniMax-Text-01")
+    model = os.getenv("MINIMAX_SCORE_MODEL", "MiniMax-Text-01")
     last_error = None
     for _ in range(2):
         try:
             raw = _chat(_judge_client(), model, prompt, temperature=0.3, max_tokens=512, role="judge")
-            # 剥离 <think>...</think> 推理过程（MiniMax-M2.7 推理模型）
-            import re as _re
             raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
-            # 兼容 JSON 被包在 ```json ... ``` 里的情况
             raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             data = json.loads(raw)
             return ScoreResult(
@@ -140,19 +149,30 @@ def score(text: str, content_type: ContentType) -> ScoreResult:
 
 
 def generate_and_pick_best(req: GenerationRequest) -> JokeRecord:
-    """生成 N 条 → 全部评分 → 返回总分最高的那条。"""
+    """生成 N 条 → 并行评分 → 返回总分最高的那条。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     candidates = generate(req)
     if not candidates:
         raise RuntimeError("模型未返回可用内容")
 
-    best_text = candidates[0]
-    best_score = score(best_text, req.content_type)
+    # 并行对所有候选评分
+    scores: dict[int, ScoreResult] = {}
+    with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+        future_to_idx = {
+            executor.submit(score, text, req.content_type): i
+            for i, text in enumerate(candidates)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                scores[idx] = future.result()
+            except Exception as exc:
+                scores[idx] = _default_score(f"并行评分失败：{exc}")
 
-    for candidate in candidates[1:]:
-        s = score(candidate, req.content_type)
-        if s.weighted_total > best_score.weighted_total:
-            best_text = candidate
-            best_score = s
+    best_idx = max(scores, key=lambda i: scores[i].weighted_total)
+    best_text = candidates[best_idx]
+    best_score = scores[best_idx]
 
     return JokeRecord(
         id=None,
