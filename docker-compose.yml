@@ -1,0 +1,13 @@
+services:
+  humorrl:
+    build: .
+    container_name: humorrl
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      # 数据库持久化（不打进镜像）
+      - ./data:/app/data
+    env_file:
+      # 服务器上只需要在同目录放 .env 文件
+      - .env
