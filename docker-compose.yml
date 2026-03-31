@@ -1,39 +1,24 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: humorrl-api
+    build: .
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    ports: ["8000:8000"]
+    volumes: [./data:/app/data]
+    env_file: [.env]
     restart: unless-stopped
-    command: uvicorn api:app --host 0.0.0.0 --port 8000
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/app/data
-    env_file:
-      - .env
 
   scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: humorrl-scheduler
-    restart: unless-stopped
+    build: .
     command: python scheduler.py
-    volumes:
-      - ./data:/app/data
-    env_file:
-      - .env
-    depends_on:
-      - api
+    volumes: [./data:/app/data]
+    env_file: [.env]
+    depends_on: [api]
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.frontend
-    container_name: humorrl-frontend
+      dockerfile: Dockerfile
+    ports: ["3000:80"]
+    depends_on: [api]
     restart: unless-stopped
-    ports:
-      - "3000:80"
-    depends_on:
-      - api

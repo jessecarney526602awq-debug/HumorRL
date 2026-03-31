@@ -87,7 +87,7 @@ export default function CalibrationPage() {
         </p>
       </header>
 
-      <section className="mx-auto flex max-w-xl flex-col gap-3 rounded-xl border border-black/5 bg-white p-2 shadow-soft md:flex-row">
+      <section className="mx-auto flex max-w-xl flex-col gap-3 rounded-xl border border-black/5 bg-white p-2 shadow-[0_20px_60px_-32px_rgba(0,0,0,0.18)] md:flex-row">
         <select
           value={contentType}
           onChange={(event) => setContentType(event.target.value)}

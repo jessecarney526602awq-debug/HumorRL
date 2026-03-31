@@ -35,7 +35,7 @@ export default function JokeCard({
   }
 
   return (
-    <article className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-soft transition-all">
+    <article className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-[0_20px_60px_-32px_rgba(0,0,0,0.18)] transition-all">
       <button className="w-full p-6 text-left transition-colors hover:bg-surface-container-low" onClick={onToggle}>
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="space-y-3">

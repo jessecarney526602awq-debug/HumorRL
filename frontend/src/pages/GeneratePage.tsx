@@ -138,7 +138,7 @@ export default function GeneratePage() {
         <button
           onClick={handleGenerate}
           disabled={loading}
-          className="group flex w-full items-center justify-center gap-3 rounded-lg bg-black py-5 font-bold tracking-[0.1em] text-white transition-all duration-300 hover:-translate-y-1 hover:shadow-soft disabled:opacity-50"
+          className="group flex w-full items-center justify-center gap-3 rounded-lg bg-black py-5 font-bold tracking-[0.1em] text-white transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_20px_60px_-32px_rgba(0,0,0,0.18)] disabled:opacity-50"
         >
           <span>{loading ? '生成中...' : '开始生成'}</span>
           <span className="material-symbols-outlined transition-transform group-hover:translate-x-1">

@@ -35,19 +35,32 @@ body {
 }
 
 .panel {
-  @apply rounded-xl border border-black/5 bg-white shadow-soft;
+  @apply rounded-xl border border-black/5 bg-white;
+  box-shadow: 0 20px 60px -32px rgba(0, 0, 0, 0.18);
 }
 
 .eyebrow {
-  @apply text-[10px] font-bold uppercase tracking-[0.18em] text-outline;
+  color: #777777;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 .metric-value {
-  @apply font-headline text-5xl font-black tracking-tight text-black;
+  color: #000000;
+  font-family: "Manrope", sans-serif;
+  font-size: 3rem;
+  font-weight: 900;
+  letter-spacing: -0.02em;
 }
 
 .page-title {
-  @apply font-headline text-4xl font-extrabold tracking-tight text-black;
+  color: #000000;
+  font-family: "Manrope", sans-serif;
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
 }
 
 .subtle-grid {
