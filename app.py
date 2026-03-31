@@ -895,6 +895,68 @@ def _page_monitor():
     except Exception as exc:
         st.info(f"暂无 UCB1 数据：{exc}")
 
+    st.markdown("---")
+    with st.expander("🧬 Prompt 进化状态", expanded=False):
+        from evolution import _parse_genes, run_evolution
+        from db import get_active_variants
+
+        evo_type_opts = list(ContentType)
+        evo_ct = st.selectbox(
+            "查看类型",
+            options=evo_type_opts,
+            format_func=lambda v: f"{CONTENT_ICONS[v]} {CONTENT_TYPE_LABELS[v]}",
+            key="evo_type_select",
+        )
+
+        variants = get_active_variants(evo_ct.value)
+
+        if not variants:
+            st.info("该类型还没有 Prompt 变体，点击「立即进化」生成初始种群。")
+        else:
+            for v in variants:
+                score_color = _score_color(v["avg_score"])
+                _, genes, _ = _parse_genes(v["prompt_text"])
+                st.markdown(f"""
+                <div class="joke-card" style="margin-bottom:8px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div>
+                      <span style="font-size:13px;font-weight:600;color:var(--text)">
+                        变体 #{v['id']} &nbsp; 第 {v['generation']} 代
+                      </span>
+                    </div>
+                    <div style="text-align:right">
+                      <span style="font-size:18px;font-weight:700;color:{score_color}">{v['avg_score']:.2f}</span>
+                      <span style="font-size:11px;color:var(--muted)"> / 使用{v['uses']}次</span>
+                    </div>
+                  </div>
+                  <div style="font-size:12px;color:var(--muted);line-height:1.8">
+                    {'<br>'.join(f'• {g}' for g in genes)}
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
+        col_evo1, col_evo2 = st.columns([1, 2])
+        with col_evo1:
+            if st.button("⚡ 立即进化一轮", key="btn_evolve", use_container_width=True):
+                with st.spinner(f"正在进化 {CONTENT_TYPE_LABELS[evo_ct]} 的 Prompt……"):
+                    try:
+                        report = run_evolution(
+                            content_type=evo_ct,
+                            population_size=4,
+                            generations=1,
+                            eval_n=2,
+                        )
+                        st.success(
+                            f"进化完成！最佳变体 #{report['best_variant_id']}，"
+                            f"得分 {report['best_score']:.2f}，"
+                            f"较进化前 {report['improvement']:+.2f}"
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"进化失败：{exc}")
+        with col_evo2:
+            st.caption("每次进化会生成新变体并评分，保留最优 4 个，自动淘汰弱者。\n每日凌晨2点自动运行。")
+
 
 # ─────────────────────────────────────────
 # 主入口

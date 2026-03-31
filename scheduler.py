@@ -100,12 +100,48 @@ def job_health_check():
         logger.error(f"健康检查失败：{exc}", exc_info=True)
 
 
+def job_evolution():
+    """每天凌晨2点运行 Prompt 遗传算法（逐类型轮换，每次只进化一种类型节省成本）。"""
+    import datetime
+
+    from contract import ContentType
+    from evolution import run_evolution
+
+    logger.info("=== Prompt 进化任务开始 ===")
+
+    if not _check_daily_budget():
+        return
+
+    weekday = datetime.datetime.now().weekday()
+    types = list(ContentType)
+    content_type = types[weekday % len(types)]
+    logger.info(f"本次进化类型：{content_type.value}")
+
+    try:
+        report = run_evolution(
+            content_type=content_type,
+            population_size=6,
+            generations=2,
+            eval_n=2,
+        )
+        logger.info(
+            f"进化完成 | 最佳变体 id={report['best_variant_id']} "
+            f"分数={report['best_score']:.2f} "
+            f"提升={report['improvement']:+.2f}"
+        )
+    except Exception as exc:
+        logger.error(f"Prompt 进化失败：{exc}", exc_info=True)
+
+    logger.info("=== Prompt 进化任务结束 ===")
+
+
 def main():
     db.init_db()
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
 
     scheduler.add_job(job_batch_generate, "cron", minute=0)
     scheduler.add_job(job_health_check, "cron", hour="0,6,12,18", minute=5)
+    scheduler.add_job(job_evolution, "cron", hour=2, minute=0)
 
     logger.info("调度器启动，按 Ctrl+C 退出")
     logger.info(f"每日 token 上限：{DAILY_TOKEN_LIMIT:,}")

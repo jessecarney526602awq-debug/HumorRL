@@ -62,6 +62,21 @@ CREATE TABLE IF NOT EXISTS api_costs (
 );
 CREATE INDEX IF NOT EXISTS idx_costs_created ON api_costs(created_at);
 CREATE INDEX IF NOT EXISTS idx_costs_model   ON api_costs(model);
+
+CREATE TABLE IF NOT EXISTS prompt_variants (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_type    TEXT    NOT NULL,
+    generation      INTEGER NOT NULL DEFAULT 0,
+    prompt_text     TEXT    NOT NULL,
+    parent_ids      TEXT    NOT NULL DEFAULT '',
+    uses            INTEGER NOT NULL DEFAULT 0,
+    total_score     REAL    NOT NULL DEFAULT 0.0,
+    avg_score       REAL    NOT NULL DEFAULT 0.0,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_variants_type ON prompt_variants(content_type);
+CREATE INDEX IF NOT EXISTS idx_variants_gen  ON prompt_variants(generation);
 """
 
 PRESET_PERSONAS = [
@@ -118,6 +133,11 @@ def init_db(db_path: str = DB_PATH) -> None:
     """建表（幂等）并写入预设 persona（如果 personas 表为空）。"""
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(jokes)").fetchall()]
+        if "prompt_variant_id" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN prompt_variant_id INTEGER REFERENCES prompt_variants(id)"
+            )
         row = conn.execute("SELECT COUNT(*) FROM personas").fetchone()
         if row[0] == 0:
             for p in PRESET_PERSONAS:
@@ -126,6 +146,7 @@ def init_db(db_path: str = DB_PATH) -> None:
                     "VALUES (?, ?, ?, 1, ?)",
                     (p["name"], p["description"], p["style_prompt"], _now()),
                 )
+    seed_prompt_variants(db_path)
 
 
 # ─────────────────────────────────────────
@@ -418,3 +439,87 @@ def get_cost_stats(days: int = 7, db_path: str = DB_PATH) -> dict:
         ],
         "daily": [{"date": r["date"], "total_tokens": int(r["total_tokens"] or 0)} for r in daily],
     }
+
+
+def save_prompt_variant(
+    content_type: str,
+    prompt_text: str,
+    generation: int,
+    parent_ids: list[int],
+    db_path: str = DB_PATH,
+) -> int:
+    """存入 prompt_variants，返回新 id。"""
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO prompt_variants "
+            "(content_type, generation, prompt_text, parent_ids, uses, total_score, avg_score, is_active, created_at) "
+            "VALUES (?, ?, ?, ?, 0, 0.0, 0.0, 1, ?)",
+            (
+                content_type,
+                generation,
+                prompt_text,
+                ",".join(str(i) for i in parent_ids),
+                _now(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_active_variants(
+    content_type: str,
+    db_path: str = DB_PATH,
+) -> list[dict]:
+    """
+    返回该类型所有 is_active=1 的变体，按 avg_score 降序。
+    每项格式：{"id": int, "prompt_text": str, "generation": int,
+               "uses": int, "avg_score": float}
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, prompt_text, generation, uses, avg_score "
+            "FROM prompt_variants WHERE content_type=? AND is_active=1 "
+            "ORDER BY avg_score DESC",
+            (content_type,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_variant_score(
+    variant_id: int,
+    score: float,
+    db_path: str = DB_PATH,
+) -> None:
+    """在 jokes 生成后调用，更新变体的累计分和平均分。"""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE prompt_variants SET "
+            "uses = uses + 1, "
+            "total_score = total_score + ?, "
+            "avg_score = (total_score + ?) / (uses + 1) "
+            "WHERE id = ?",
+            (score, score, variant_id),
+        )
+
+
+def seed_prompt_variants(db_path: str = DB_PATH) -> None:
+    """
+    将现有 5 个 .txt 文件作为第 0 代变体写入 DB（幂等：若该类型已有变体则跳过）。
+    在 init_db() 末尾调用。
+    """
+    from contract import PROMPT_PATHS
+
+    project_root = Path(__file__).resolve().parent
+    with _connect(db_path) as conn:
+        for ct, path in PROMPT_PATHS.items():
+            existing = conn.execute(
+                "SELECT COUNT(*) FROM prompt_variants WHERE content_type=?",
+                (ct.value,),
+            ).fetchone()[0]
+            if existing == 0:
+                text = (project_root / path).read_text(encoding="utf-8")
+                conn.execute(
+                    "INSERT INTO prompt_variants "
+                    "(content_type, generation, prompt_text, parent_ids, uses, total_score, avg_score, is_active, created_at) "
+                    "VALUES (?, 0, ?, '', 0, 0.0, 0.0, 1, ?)",
+                    (ct.value, text, _now()),
+                )
