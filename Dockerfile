@@ -12,10 +12,6 @@ COPY . .
 # 初始化数据库
 RUN mkdir -p data
 
-EXPOSE 8501
+EXPOSE 8000
 
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
