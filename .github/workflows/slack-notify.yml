@@ -1,0 +1,29 @@
+name: Slack 推送通知
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 发送 Slack 通知
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "🚀 *HumorRL* 有新代码推送",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🚀 HumorRL 代码更新*\n\n*提交者:* ${{ github.actor }}\n*分支:* `${{ github.ref_name }}`\n*消息:* ${{ github.event.head_commit.message }}\n*查看:* <${{ github.event.head_commit.url }}|点击查看 diff>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
