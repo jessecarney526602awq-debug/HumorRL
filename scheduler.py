@@ -29,10 +29,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DAILY_TOKEN_LIMIT = int(os.getenv("DAILY_TOKEN_LIMIT", "500000"))
-# 生成批次间隔（分钟）。
-BATCH_INTERVAL_MINUTES = int(os.getenv("BATCH_INTERVAL_MINUTES", "30"))
-# 每种内容类型每批生成几条候选（全部打分存入）。
-BATCH_SIZE_PER_TYPE = int(os.getenv("BATCH_SIZE_PER_TYPE", "5"))
+# 每轮总周期（分钟）= 生成时长 + 战略师总结时间，默认 40（30生成+10总结）
+CYCLE_INTERVAL_MINUTES = int(os.getenv("CYCLE_INTERVAL_MINUTES", "40"))
+# 单轮生成窗口（分钟），窗口内循环调用 API 尽可能多生成
+GENERATE_WINDOW_MINUTES = int(os.getenv("GENERATE_WINDOW_MINUTES", "28"))
+# 每次 API 调用生成几条候选（并行评分后全存）
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "5"))
+# 今日训练的内容类型，对应 ContentType 枚举值，如 text_joke / standup / cold_joke 等
+DAILY_CONTENT_TYPE = os.getenv("DAILY_CONTENT_TYPE", "text_joke")
 
 
 def _check_daily_budget() -> bool:
@@ -50,67 +54,88 @@ def job_heartbeat():
     db.upsert_job_status("heartbeat", "success")
 
 
-def job_batch_generate():
+def job_training_cycle():
     """
-    批量生成任务（每 BATCH_INTERVAL_MINUTES 分钟执行一次）。
-    遍历所有内容类型，每种生成 BATCH_SIZE_PER_TYPE 条候选，全部打分，全部存入 DB。
+    完整训练周期（每 CYCLE_INTERVAL_MINUTES 分钟执行一次）：
+      1. [GENERATE_WINDOW_MINUTES 分钟内] 循环生成 DAILY_CONTENT_TYPE 类型，全量存入
+      2. 生成窗口结束后，战略师强制复盘，下发下一轮指令
     """
     from contract import ContentType
-    logger.info("=== 批量生成任务开始 ===")
-    db.upsert_job_status("batch_generate", "running")
+    from strategist import incremental_review
 
-    if not _check_daily_budget():
-        db.upsert_job_status("batch_generate", "success", {"skipped": "budget"})
+    try:
+        content_type = ContentType(DAILY_CONTENT_TYPE)
+    except ValueError:
+        logger.error(f"DAILY_CONTENT_TYPE='{DAILY_CONTENT_TYPE}' 不是有效的 ContentType，跳过")
+        db.upsert_job_status("batch_generate", "error", {"error": f"invalid type: {DAILY_CONTENT_TYPE}"})
         return
 
+    logger.info(f"=== 训练周期开始 | 类型={content_type.value} | 窗口={GENERATE_WINDOW_MINUTES}分钟 ===")
+    db.upsert_job_status("batch_generate", "running")
+
+    # ── 阶段一：生成窗口 ──────────────────────────────────────────────
     alert = monitor.detect_reward_hacking()
     if alert.level >= 2:
-        logger.warning(f"Reward Hacking L{alert.level}，停止生成：{alert.message}")
+        logger.warning(f"Reward Hacking L{alert.level}，本轮跳过生成：{alert.message}")
         db.upsert_job_status("batch_generate", "success", {"skipped": f"hacking_l{alert.level}"})
         return
 
     total_saved = 0
     total_score = 0.0
-    errors = []
+    round_num = 0
+    deadline = time.time() + GENERATE_WINDOW_MINUTES * 60
 
-    for content_type in ContentType:
+    while time.time() < deadline:
         if not _check_daily_budget():
-            logger.warning("token 预算耗尽，提前结束本批次")
+            logger.warning("token 预算耗尽，提前结束生成窗口")
             break
+        round_num += 1
         try:
-            req = GenerationRequest(content_type=content_type, n=BATCH_SIZE_PER_TYPE)
+            req = GenerationRequest(content_type=content_type, n=BATCH_SIZE)
             jokes = humor_engine.generate_and_score_all(req)
             for joke in jokes:
                 saved_id = db.save_joke(joke)
                 s = joke.score.weighted_total if joke.score else 0
                 total_score += s
                 total_saved += 1
-                logger.info(f"  [{content_type.value}] id={saved_id} 得分={s:.2f}")
+            avg_r = total_score / total_saved if total_saved else 0
+            logger.info(f"  第{round_num}轮完成，本轮{len(jokes)}条，累计{total_saved}条，均分{avg_r:.2f}")
         except Exception as exc:
-            logger.error(f"  [{content_type.value}] 生成失败：{exc}", exc_info=True)
-            errors.append(f"{content_type.value}:{exc}")
+            logger.error(f"  第{round_num}轮生成失败：{exc}", exc_info=True)
+            time.sleep(10)  # 出错后稍等再试
 
     avg_score = total_score / total_saved if total_saved else 0.0
-    logger.info(f"本批次共存入 {total_saved} 条，平均得分 {avg_score:.2f}")
+    logger.info(f"生成窗口结束：共 {round_num} 轮，{total_saved} 条，平均得分 {avg_score:.2f}")
 
-    if alert.level == 1:
-        logger.warning(f"Reward Hacking L1 预警：{alert.action}")
+    db.upsert_job_status("batch_generate", "success", {
+        "saved": total_saved, "rounds": round_num, "avg_score": round(avg_score, 2),
+        "type": content_type.value,
+    })
 
+    # ── 阶段二：战略师强制复盘 ─────────────────────────────────────────
+    if total_saved == 0:
+        logger.warning("本轮无新内容，跳过战略师复盘")
+        return
+
+    logger.info("=== 战略师复盘开始 ===")
+    db.upsert_job_status("daily_report", "running")
     try:
-        from strategist import maybe_trigger
-        result = maybe_trigger()
-        if result and not result.get("skipped"):
+        last_id = db.get_last_strategist_joke_id()
+        result = incremental_review(since_joke_id=last_id)
+        if result.get("skipped"):
+            logger.info(f"战略师复盘跳过：{result.get('reason')}")
+        else:
+            n_rules = len(result.get("humor_rules", []))
             n_genes = len(result.get("new_genes", []))
             directive = result.get("next_directive", "")
-            logger.info(f"战略师复盘完成 | 新基因={n_genes} | 指令：{directive[:60]}")
+            logger.info(f"战略师复盘完成 | 规律={n_rules} 基因={n_genes}")
+            logger.info(f"下轮生成指令：{directive[:80]}")
+        db.upsert_job_status("daily_report", "success", {"preview": str(result.get("insight", ""))[:80]})
     except Exception as exc:
-        logger.warning(f"战略师触发检查失败（不影响主流程）：{exc}")
+        logger.error(f"战略师复盘失败：{exc}", exc_info=True)
+        db.upsert_job_status("daily_report", "error", {"error": str(exc)})
 
-    db.upsert_job_status("batch_generate", "success" if not errors else "error", {
-        "saved": total_saved, "avg_score": round(avg_score, 2),
-        "errors": errors[:3] if errors else None,
-    })
-    logger.info("=== 批量生成任务结束 ===")
+    logger.info(f"=== 训练周期结束，下一轮将在 {CYCLE_INTERVAL_MINUTES - GENERATE_WINDOW_MINUTES} 分钟后开始 ===")
 
 
 def job_health_check():
@@ -193,15 +218,17 @@ def main():
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
 
     scheduler.add_job(job_heartbeat, "interval", minutes=1)
-    scheduler.add_job(job_batch_generate, "interval", minutes=BATCH_INTERVAL_MINUTES)
+    # 核心训练周期：生成窗口 + 战略师复盘，串行在一个 job 里
+    scheduler.add_job(job_training_cycle, "interval", minutes=CYCLE_INTERVAL_MINUTES)
     scheduler.add_job(job_health_check, "cron", hour="0,6,12,18", minute=5)
     scheduler.add_job(job_evolution, "cron", hour=2, minute=0)
     scheduler.add_job(job_daily_report, "cron", hour=23, minute=55)
 
     logger.info("调度器启动，按 Ctrl+C 退出")
+    logger.info(f"今日训练类型：{DAILY_CONTENT_TYPE}")
+    logger.info(f"周期：{GENERATE_WINDOW_MINUTES}分钟生成 + ~{CYCLE_INTERVAL_MINUTES - GENERATE_WINDOW_MINUTES}分钟战略师复盘，总间隔={CYCLE_INTERVAL_MINUTES}分钟")
+    logger.info(f"每次 API 调用：{BATCH_SIZE} 条候选")
     logger.info(f"每日 token 上限：{DAILY_TOKEN_LIMIT:,}")
-    logger.info(f"批量生成间隔：{BATCH_INTERVAL_MINUTES} 分钟")
-    logger.info(f"战略师触发阈值：{os.getenv('STRATEGIST_TRIGGER_INTERVAL', '10')} 条新内容")
 
     try:
         scheduler.start()
