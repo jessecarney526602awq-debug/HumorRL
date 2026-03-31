@@ -330,7 +330,7 @@ def _sidebar_nav() -> str:
 
     page = st.radio(
         "导航",
-        ["🎲  生成", "📋  历史记录", "📊  统计", "🧑‍🎨  Persona", "🔬  校准报告"],
+        ["🎲  生成", "📋  历史记录", "📊  统计", "🧑‍🎨  Persona", "🔬  校准报告", "📡  监控"],
         label_visibility="collapsed",
     )
     return page
@@ -792,6 +792,110 @@ def _page_calibration():
             st.error(f"校准计算失败：{exc}")
 
 
+def _page_monitor():
+    from monitor import compute_diversity, detect_reward_hacking
+    from strategy import get_type_performance_summary
+
+    st.markdown("""
+    <div class="page-header">
+      <h1>监控中心</h1>
+      <p>生成质量、多样性、成本与 Reward Hacking 实时检测</p>
+    </div>""", unsafe_allow_html=True)
+
+    if st.button("🔄  刷新数据"):
+        st.rerun()
+
+    try:
+        alert = detect_reward_hacking()
+        level_colors = {0: "var(--good)", 1: "var(--warn)", 2: "var(--bad)", 3: "#ff0000"}
+        level_labels = {0: "✅ 正常", 1: "⚠️ L1 预警", 2: "🚨 L2 警告", 3: "🛑 L3 严重"}
+        color = level_colors.get(alert.level, "var(--muted)")
+        label = level_labels.get(alert.level, "未知")
+        st.markdown(f"""
+        <div class="joke-card" style="border-color:{color}">
+          <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Reward Hacking 检测</div>
+          <div style="font-size:18px;font-weight:700;color:{color};margin-bottom:6px">{label}</div>
+          <div style="font-size:13px;color:var(--text)">{alert.message}</div>
+          {"<div style='font-size:12px;color:var(--warn);margin-top:8px'>建议：" + alert.action + "</div>" if alert.level > 0 else ""}
+        </div>""", unsafe_allow_html=True)
+    except Exception as exc:
+        st.warning(f"Reward Hacking 检测失败：{exc}")
+
+    st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**内容多样性**")
+        try:
+            diversity = compute_diversity()
+            st.markdown(f"""
+            <div class="stat-card" style="text-align:left;margin-bottom:0.75rem">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <div class="stat-num">{diversity.diversity_ratio:.0%}</div>
+                  <div class="stat-lbl">多样性指数（Shannon 熵）</div>
+                </div>
+                <div style="font-size:28px">{"🌈" if diversity.diversity_ratio >= 0.8 else "🟡" if diversity.diversity_ratio >= 0.5 else "🔴"}</div>
+              </div>
+              <div style="font-size:12px;color:var(--muted);margin-top:8px">{diversity.interpretation}</div>
+            </div>""", unsafe_allow_html=True)
+            dist_data = {
+                CONTENT_TYPE_LABELS[ContentType(k)]: v
+                for k, v in diversity.type_distribution.items()
+            }
+            if dist_data:
+                st.bar_chart(dist_data, height=160)
+        except Exception as exc:
+            st.info(f"暂无多样性数据：{exc}")
+
+    with col_right:
+        st.markdown("**API 成本（近7天）**")
+        try:
+            from db import get_cost_stats
+
+            costs = get_cost_stats(days=7)
+            total_tok = costs["total_tokens"]
+            est_usd = total_tok / 1_000_000 * 0.14
+            st.markdown(f"""
+            <div class="stat-card" style="margin-bottom:0.75rem">
+              <div class="stat-num">{total_tok:,}</div>
+              <div class="stat-lbl">近7天总 tokens</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px">≈ ${est_usd:.3f} USD</div>
+            </div>""", unsafe_allow_html=True)
+            if costs["daily"]:
+                daily_data = {r["date"]: r["total_tokens"] for r in costs["daily"]}
+                st.line_chart(daily_data, height=160)
+        except Exception as exc:
+            st.info(f"暂无成本数据：{exc}")
+
+    st.markdown("**UCB1 内容策略**")
+    try:
+        summary = get_type_performance_summary()
+        for item in summary:
+            label = item["label"]
+            plays = item["plays"]
+            avg = item["avg_score"]
+            ucb1 = item["ucb1_value"]
+            rec = item["recommended"]
+            bar_w = 100 if ucb1 == float("inf") else min(int(ucb1 / 2 * 100), 100)
+            rec_badge = '<span class="badge badge-type">推荐</span>' if rec else ""
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+              <div style="width:90px;font-size:13px;color:var(--text)">{label} {rec_badge}</div>
+              <div style="flex:1">
+                <div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden">
+                  <div style="width:{bar_w}%;height:100%;background:var(--accent);border-radius:3px"></div>
+                </div>
+              </div>
+              <div style="width:120px;font-size:12px;color:var(--muted);text-align:right">
+                {plays}次 · 均分{avg:.1f} · UCB1={"∞" if ucb1 == float("inf") else f"{ucb1:.3f}"}
+              </div>
+            </div>""", unsafe_allow_html=True)
+    except Exception as exc:
+        st.info(f"暂无 UCB1 数据：{exc}")
+
+
 # ─────────────────────────────────────────
 # 主入口
 # ─────────────────────────────────────────
@@ -809,6 +913,8 @@ def main():
         _page_persona()
     elif "校准" in page:
         _page_calibration()
+    elif "监控" in page:
+        _page_monitor()
     else:
         _page_stats()
 

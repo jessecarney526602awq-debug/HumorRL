@@ -11,3 +11,14 @@ services:
     env_file:
       # 服务器上只需要在同目录放 .env 文件
       - .env
+  scheduler:
+    build: .
+    container_name: humorrl-scheduler
+    restart: unless-stopped
+    command: python scheduler.py
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    depends_on:
+      - humorrl

@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS jokes (
 
 CREATE INDEX IF NOT EXISTS idx_jokes_type  ON jokes(content_type);
 CREATE INDEX IF NOT EXISTS idx_jokes_score ON jokes(score_total);
+
+CREATE TABLE IF NOT EXISTS api_costs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    model       TEXT    NOT NULL,
+    role        TEXT    NOT NULL,
+    prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_costs_created ON api_costs(created_at);
+CREATE INDEX IF NOT EXISTS idx_costs_model   ON api_costs(model);
 """
 
 PRESET_PERSONAS = [
@@ -339,3 +351,70 @@ def get_rewrite_chain(root_id: int, db_path: str = DB_PATH) -> list[JokeRecord]:
         current_id = next_row["id"] if next_row else None
 
     return chain
+
+
+def log_api_cost(
+    model: str,
+    role: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    db_path: str = DB_PATH,
+) -> None:
+    """记录一次 API 调用的 token 用量。"""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO api_costs (model, role, prompt_tokens, completion_tokens, total_tokens, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                model,
+                role,
+                prompt_tokens,
+                completion_tokens,
+                prompt_tokens + completion_tokens,
+                _now(),
+            ),
+        )
+
+
+def get_cost_stats(days: int = 7, db_path: str = DB_PATH) -> dict:
+    """
+    返回最近 N 天的 cost 统计。
+    结果格式：
+    {
+        "total_tokens": int,
+        "by_model": [{"model": str, "role": str, "total_tokens": int, "calls": int}],
+        "daily": [{"date": str, "total_tokens": int}],
+    }
+    """
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM api_costs WHERE created_at >= ?",
+            (cutoff,),
+        ).fetchone()[0]
+
+        by_model = conn.execute(
+            "SELECT model, role, SUM(total_tokens) as total_tokens, COUNT(*) as calls "
+            "FROM api_costs WHERE created_at >= ? GROUP BY model, role",
+            (cutoff,),
+        ).fetchall()
+
+        daily = conn.execute(
+            "SELECT substr(created_at, 1, 10) as date, SUM(total_tokens) as total_tokens "
+            "FROM api_costs WHERE created_at >= ? GROUP BY date ORDER BY date",
+            (cutoff,),
+        ).fetchall()
+
+    return {
+        "total_tokens": int(total),
+        "by_model": [
+            {
+                "model": r["model"],
+                "role": r["role"],
+                "total_tokens": int(r["total_tokens"] or 0),
+                "calls": int(r["calls"] or 0),
+            }
+            for r in by_model
+        ],
+        "daily": [{"date": r["date"], "total_tokens": int(r["total_tokens"] or 0)} for r in daily],
+    }

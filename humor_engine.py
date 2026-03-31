@@ -54,6 +54,22 @@ def _chat(client: OpenAI, model: str, prompt: str, temperature: float, max_token
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
+    usage = resp.usage
+    if usage:
+        host = getattr(getattr(client, "base_url", None), "host", "") or ""
+        host = host.lower()
+        role = "judge" if "minimax" in host else "writer"
+        try:
+            import db as _db
+
+            _db.log_api_cost(
+                model=model,
+                role=role,
+                prompt_tokens=usage.prompt_tokens or 0,
+                completion_tokens=usage.completion_tokens or 0,
+            )
+        except Exception:
+            pass
     return resp.choices[0].message.content.strip()
 
 
