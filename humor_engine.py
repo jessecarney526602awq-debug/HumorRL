@@ -1,8 +1,8 @@
 """
 HumorRL — 生成与评分引擎
 
-生成：DeepSeek API（deepseek-chat，temperature 0.9）
-评分：MiniMax API（MiniMax-Text-01，temperature 0.3）
+生成：MiniMax API（MiniMax-M2.7，temperature 0.9）
+评分：MiniMax API（MiniMax-M2.7，temperature 0.3）
 """
 
 import json
@@ -32,11 +32,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # ─────────────────────────────────────────
 
 def _writer_client() -> OpenAI:
-    """DeepSeek — 负责生成笑话"""
-    key = os.getenv("DEEPSEEK_API_KEY")
+    """MiniMax — 负责生成笑话"""
+    key = os.getenv("MINIMAX_API_KEY")
     if not key:
-        raise RuntimeError("DEEPSEEK_API_KEY 未设置")
-    return OpenAI(api_key=key, base_url="https://api.deepseek.com")
+        raise RuntimeError("MINIMAX_API_KEY 未设置")
+    return OpenAI(api_key=key, base_url="https://api.minimax.chat/v1")
 
 
 def _judge_client() -> OpenAI:
@@ -47,7 +47,8 @@ def _judge_client() -> OpenAI:
     return OpenAI(api_key=key, base_url="https://api.minimax.chat/v1")
 
 
-def _chat(client: OpenAI, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
+def _chat(client: OpenAI, model: str, prompt: str, temperature: float, max_tokens: int,
+          role: str = "writer") -> str:
     resp = client.chat.completions.create(
         model=model,
         temperature=temperature,
@@ -56,12 +57,8 @@ def _chat(client: OpenAI, model: str, prompt: str, temperature: float, max_token
     )
     usage = resp.usage
     if usage:
-        host = getattr(getattr(client, "base_url", None), "host", "") or ""
-        host = host.lower()
-        role = "judge" if "minimax" in host else "writer"
         try:
             import db as _db
-
             _db.log_api_cost(
                 model=model,
                 role=role,
@@ -90,7 +87,7 @@ def _default_score(reasoning: str) -> ScoreResult:
 # ─────────────────────────────────────────
 
 def generate(req: GenerationRequest) -> list[str]:
-    """DeepSeek 生成 req.n 条内容，返回文本列表。"""
+    """MiniMax 生成 req.n 条内容，返回文本列表。"""
     prompt = _read_prompt(PROMPT_PATHS[req.content_type])
     persona_block = ""
     if req.persona is not None:
@@ -102,8 +99,8 @@ def generate(req: GenerationRequest) -> list[str]:
         .replace("{n}", str(req.n))
     )
 
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    text = _chat(_writer_client(), model, prompt, temperature=0.9, max_tokens=4000)
+    model = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+    text = _chat(_writer_client(), model, prompt, temperature=0.9, max_tokens=4000, role="writer")
     results = [item.strip() for item in text.split("===") if item.strip()]
     return results[:req.n] if len(results) > req.n else results
 
@@ -120,7 +117,7 @@ def score(text: str, content_type: ContentType) -> ScoreResult:
     last_error = None
     for _ in range(2):
         try:
-            raw = _chat(_judge_client(), model, prompt, temperature=0.3, max_tokens=512)
+            raw = _chat(_judge_client(), model, prompt, temperature=0.3, max_tokens=512, role="judge")
             # 剥离 <think>...</think> 推理过程（MiniMax-M2.7 推理模型）
             import re as _re
             raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
