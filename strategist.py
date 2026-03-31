@@ -19,6 +19,7 @@ from contract import ContentType, CONTENT_TYPE_LABELS
 REVIEW_PROMPT_PATH = "prompts/strategist/review.txt"
 SELF_LEARN_PROMPT_PATH = "prompts/strategist/self_learn.txt"
 DAILY_REPORT_PROMPT_PATH = "prompts/strategist/daily_report.txt"
+PERSONA_GEN_PROMPT_PATH = "prompts/strategist/persona_gen.txt"
 
 
 def _pro_chat(prompt: str, max_tokens: int = 2000) -> str:
@@ -325,3 +326,29 @@ def maybe_trigger(db_path: str = db.DB_PATH) -> Optional[dict]:
 
     db.set_last_strategist_joke_id(latest_id, db_path=db_path)
     return report
+
+
+def generate_persona_style(
+    name_input: str,
+    background: str,
+    db_path: str = db.DB_PATH,
+) -> dict:
+    """
+    根据用户输入的背景描述，用战略师生成 Persona 的 style_prompt。
+    返回 {"name": str, "description": str, "style_prompt": str}
+    失败时抛出 RuntimeError。
+    """
+    prompt = (
+        humor_engine._read_prompt(PERSONA_GEN_PROMPT_PATH)
+        .replace("{name_input}", name_input.strip() or "（用户未提供）")
+        .replace("{background}", background.strip())
+    )
+    result = _parse_json(_pro_chat(prompt, max_tokens=600))
+    style_prompt = str(result.get("style_prompt", "")).strip()
+    if not style_prompt:
+        raise RuntimeError("AI 未返回有效的 style_prompt")
+    return {
+        "name": str(result.get("name", "")).strip() or name_input or "自定义角色",
+        "description": str(result.get("description", "")).strip(),
+        "style_prompt": style_prompt,
+    }

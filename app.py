@@ -10,6 +10,7 @@ import humor_engine
 from contract import CONTENT_TYPE_LABELS, ContentType, GenerationRequest
 from calibration import compute_calibration, format_report_text
 from db import (
+    delete_persona,
     get_joke_by_id,
     get_jokes,
     get_personas,
@@ -18,6 +19,7 @@ from db import (
     init_db,
     save_joke,
     save_persona,
+    update_persona,
     update_human_rating,
 )
 from rewriter import rewrite_until_good
@@ -254,6 +256,9 @@ def _init_state():
         "rewrite_source_id": None,
         "rewrite_results": [],
         "rewrite_in_progress": False,
+        "persona_creation_step": "input",
+        "persona_preview": None,
+        "persona_edit_id": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -704,51 +709,218 @@ def _page_persona():
     st.markdown("""
     <div class="page-header">
       <h1>Persona 管理</h1>
-      <p>查看预设角色，或创建你自己的说话风格</p>
+      <p>用 AI 设计独特的幽默角色风格，生成时自动代入</p>
     </div>""", unsafe_allow_html=True)
 
     personas = get_personas()
     preset = [p for p in personas if p.is_preset]
     custom = [p for p in personas if not p.is_preset]
 
-    for group_label, group in [("预设角色", preset), ("自定义角色", custom)]:
-        if not group:
-            continue
-        st.markdown(f"**{group_label}**")
-        cols = st.columns(min(len(group), 3))
-        for i, p in enumerate(group):
-            with cols[i % 3]:
+    tab_list, tab_create = st.tabs(["🃏 角色列表", "✨ 创建新角色"])
+
+    with tab_list:
+        if not personas:
+            st.markdown("""
+            <div class="empty-state">
+              <div class="empty-icon">👤</div>
+              <h3>还没有任何角色</h3>
+              <p>切换到「创建新角色」Tab 来添加</p>
+            </div>""", unsafe_allow_html=True)
+        else:
+            for group_label, group in [("🎭 预设角色", preset), ("🎨 自定义角色", custom)]:
+                if not group:
+                    continue
+                st.markdown(f"**{group_label}**")
+                for p in group:
+                    with st.expander(f"{p.name}  —  {p.description}", expanded=False):
+                        col_info, col_actions = st.columns([3, 1])
+                        with col_info:
+                            st.markdown(f"""
+                            <div style="font-size:13px;color:var(--text);line-height:1.8;
+                                        background:var(--surface2);border-radius:8px;padding:12px">
+                              {p.style_prompt}
+                            </div>""", unsafe_allow_html=True)
+                        with col_actions:
+                            if st.button("✏️ 编辑", key=f"edit_btn_{p.id}", use_container_width=True):
+                                st.session_state.persona_edit_id = p.id
+                                st.session_state.persona_preview = {
+                                    "name": p.name,
+                                    "description": p.description,
+                                    "style_prompt": p.style_prompt,
+                                }
+                                st.session_state.persona_creation_step = "edit"
+                                st.rerun()
+                            if not p.is_preset:
+                                if st.button("🗑️ 删除", key=f"del_btn_{p.id}", use_container_width=True):
+                                    try:
+                                        delete_persona(p.id)
+                                        st.success(f"已删除「{p.name}」")
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"删除失败：{exc}")
+
+        if st.session_state.get("persona_creation_step") == "edit" and st.session_state.get("persona_edit_id"):
+            st.markdown("---")
+            st.markdown("**编辑角色**")
+            preview = st.session_state.persona_preview
+            edit_name = st.text_input("角色名称", value=preview["name"], key="edit_name")
+            edit_desc = st.text_input("一句话简介", value=preview["description"], key="edit_desc")
+            edit_style = st.text_area("风格 Prompt", value=preview["style_prompt"], height=140, key="edit_style")
+
+            col_save, col_ai, col_cancel = st.columns(3)
+            with col_save:
+                if st.button("💾 保存修改", use_container_width=True, key="edit_save"):
+                    try:
+                        update_persona(
+                            st.session_state.persona_edit_id,
+                            edit_name.strip(),
+                            edit_desc.strip(),
+                            edit_style.strip(),
+                        )
+                        st.success("已保存！")
+                        st.session_state.persona_creation_step = "input"
+                        st.session_state.persona_edit_id = None
+                        st.session_state.persona_preview = None
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"保存失败：{exc}")
+            with col_ai:
+                if st.button("🤖 AI 重新生成风格", use_container_width=True, key="edit_regen"):
+                    with st.spinner("AI 重新分析中……"):
+                        try:
+                            from strategist import generate_persona_style
+
+                            result = generate_persona_style(edit_name, edit_desc or edit_name)
+                            st.session_state.persona_preview["style_prompt"] = result["style_prompt"]
+                            st.session_state.persona_preview["description"] = result.get("description", edit_desc)
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"AI 生成失败：{exc}")
+            with col_cancel:
+                if st.button("✕ 取消", use_container_width=True, key="edit_cancel"):
+                    st.session_state.persona_creation_step = "input"
+                    st.session_state.persona_edit_id = None
+                    st.session_state.persona_preview = None
+                    st.rerun()
+
+    with tab_create:
+        step = st.session_state.get("persona_creation_step", "input")
+
+        if step == "input":
+            st.markdown("""
+            <div style="background:var(--surface2);border-radius:12px;padding:1.25rem;margin-bottom:1rem">
+              <div style="font-size:13px;color:var(--muted);margin-bottom:0.5rem">💡 怎么用</div>
+              <div style="font-size:13px;color:var(--text);line-height:1.8">
+                描述你想要的角色背景，AI 会自动生成完整的幽默风格。<br>
+                例如：「一个90后程序员，996，爱摸鱼，对产品需求有无尽吐槽」
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            name_input = st.text_input(
+                "角色名称（可留空，AI 自动起名）",
+                placeholder="例：厌世文青、摸鱼大师",
+                key="new_persona_name",
+            )
+            background = st.text_area(
+                "背景描述 *",
+                placeholder="用自然语言描述这个角色是谁、有什么特点、说话风格大概是什么...",
+                height=120,
+                key="new_persona_bg",
+            )
+
+            col_ai_btn, col_manual_btn = st.columns([2, 1])
+            with col_ai_btn:
+                if st.button("🤖 AI 生成人设", use_container_width=True, key="btn_ai_gen"):
+                    if not background.strip():
+                        st.error("请先填写背景描述")
+                    else:
+                        with st.spinner("战略师正在分析角色特征，生成幽默风格……"):
+                            try:
+                                from strategist import generate_persona_style
+
+                                result = generate_persona_style(name_input, background)
+                                st.session_state.persona_preview = result
+                                st.session_state.persona_creation_step = "preview"
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"AI 生成失败：{exc}")
+            with col_manual_btn:
+                if st.button("✍️ 手动填写", use_container_width=True, key="btn_manual"):
+                    st.session_state.persona_preview = {
+                        "name": name_input or "自定义角色",
+                        "description": "",
+                        "style_prompt": "",
+                    }
+                    st.session_state.persona_creation_step = "preview"
+                    st.rerun()
+
+        elif step == "preview":
+            preview = st.session_state.persona_preview or {}
+
+            st.markdown("**预览 & 微调**")
+            st.markdown("""
+            <div style="font-size:12px;color:var(--muted);margin-bottom:1rem">
+              AI 生成的内容可以直接修改，满意后点击「确认创建」
+            </div>""", unsafe_allow_html=True)
+
+            final_name = st.text_input("角色名称", value=preview.get("name", ""), key="preview_name")
+            final_desc = st.text_input("一句话简介", value=preview.get("description", ""), key="preview_desc")
+            final_style = st.text_area(
+                "风格 Prompt",
+                value=preview.get("style_prompt", ""),
+                height=160,
+                key="preview_style",
+                help="这段文字会在生成段子时注入给 AI，决定角色的说话方式",
+            )
+
+            if final_name and final_style:
+                st.markdown("**效果预览**")
                 st.markdown(f"""
                 <div class="joke-card">
-                  <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">{p.name}</div>
-                  <div style="font-size:12px;color:var(--muted);margin-bottom:8px">{p.description}</div>
-                  <div style="font-size:12px;color:var(--text);line-height:1.6">
-                    {p.style_prompt[:80]}{'…' if len(p.style_prompt) > 80 else ''}
+                  <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">
+                    {final_name}
+                  </div>
+                  <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+                    {final_desc}
+                  </div>
+                  <div style="font-size:13px;color:var(--text);line-height:1.7;
+                              background:var(--surface2);border-radius:8px;padding:10px">
+                    {final_style}
                   </div>
                 </div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("#### 创建自定义角色")
-    with st.form("create_persona_form"):
-        p_name = st.text_input("角色名称", placeholder="例：厌世文青")
-        p_desc = st.text_input("一句话描述", placeholder="例：28岁，对一切都有意见")
-        p_style = st.text_area("风格 Prompt", placeholder="你是……用2-5句话描述说话风格", height=120)
-        submitted = st.form_submit_button("创建角色", use_container_width=True)
+            col_confirm, col_regen, col_back = st.columns(3)
+            with col_confirm:
+                if st.button("✅ 确认创建", use_container_width=True, key="btn_confirm_create"):
+                    if not final_name.strip() or not final_style.strip():
+                        st.error("角色名称和风格 Prompt 不能为空")
+                    else:
+                        from contract import Persona as PersonaModel
 
-    if submitted:
-        if not p_name.strip() or not p_style.strip():
-            st.error("角色名称和风格 Prompt 不能为空")
-        else:
-            from contract import Persona as PersonaModel
-            try:
-                new_id = save_persona(PersonaModel(
-                    id=None, name=p_name.strip(), description=p_desc.strip(),
-                    style_prompt=p_style.strip(), is_preset=False,
-                ))
-                st.success(f"角色「{p_name}」已创建（ID={new_id}）")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"创建失败：{exc}")
+                        try:
+                            new_id = save_persona(PersonaModel(
+                                id=None,
+                                name=final_name.strip(),
+                                description=final_desc.strip(),
+                                style_prompt=final_style.strip(),
+                                is_preset=False,
+                            ))
+                            st.success(f"✨ 角色「{final_name}」已创建！ID={new_id}")
+                            st.session_state.persona_creation_step = "input"
+                            st.session_state.persona_preview = None
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"创建失败：{exc}")
+            with col_regen:
+                if st.button("🔄 重新生成", use_container_width=True, key="btn_regen"):
+                    st.session_state.persona_creation_step = "input"
+                    st.session_state.persona_preview = None
+                    st.rerun()
+            with col_back:
+                if st.button("← 返回", use_container_width=True, key="btn_back_to_input"):
+                    st.session_state.persona_creation_step = "input"
+                    st.session_state.persona_preview = None
+                    st.rerun()
 
 
 def _page_calibration():
@@ -960,7 +1132,7 @@ def _page_monitor():
     st.markdown("---")
     with st.expander("📚 知识库", expanded=False):
         from db import get_knowledge, get_last_strategist_joke_id
-        from strategist import incremental_review
+        from strategist import incremental_review, self_learn
 
         knowledge_type_labels = {
             None: "全部",
@@ -977,7 +1149,7 @@ def _page_monitor():
             key="knowledge_type_filter",
         )
 
-        col_k1, col_k2 = st.columns([1, 2])
+        col_k1, col_k2 = st.columns(2)
         with col_k1:
             if st.button("🔬 立即复盘", key="btn_incremental_review", use_container_width=True):
                 try:
@@ -997,7 +1169,21 @@ def _page_monitor():
                 except Exception as exc:
                     st.error(f"复盘失败：{exc}")
         with col_k2:
-            st.caption("每满 50 条新笑话会自动触发一次增量复盘。这里可以手动对最近未复盘数据立即分析。")
+            if st.button("🏋️ 自主训练", key="btn_self_learn", use_container_width=True):
+                try:
+                    with st.spinner("战略师正在对知识库进行自我提炼……"):
+                        result = self_learn()
+                    if result.get("skipped"):
+                        st.warning(f"跳过：{result.get('reason', '条件未满足')}")
+                    else:
+                        n_meta = len(result.get("meta_rules", []))
+                        st.success(
+                            f"自主训练完成！提炼了 {n_meta} 条元规律。"
+                            f"进化方向：{result.get('evolution_direction', '')}"
+                        )
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"自主训练失败：{exc}")
 
         entries = get_knowledge(entry_type=knowledge_type, limit=50)
         if not entries:

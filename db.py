@@ -206,6 +206,30 @@ def get_personas(db_path: str = DB_PATH) -> list[Persona]:
     ]
 
 
+def update_persona(
+    persona_id: int,
+    name: str,
+    description: str,
+    style_prompt: str,
+    db_path: str = DB_PATH,
+) -> None:
+    """更新 persona 信息（用于 AI 辅助编辑后保存）。"""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE personas SET name=?, description=?, style_prompt=? WHERE id=?",
+            (name, description, style_prompt, persona_id),
+        )
+
+
+def delete_persona(persona_id: int, db_path: str = DB_PATH) -> None:
+    """删除自定义 persona（仅非预设）。"""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM personas WHERE id=? AND is_preset=0",
+            (persona_id,),
+        )
+
+
 # ─────────────────────────────────────────
 # Joke CRUD
 # ─────────────────────────────────────────
