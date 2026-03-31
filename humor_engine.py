@@ -1,8 +1,9 @@
 """
 HumorRL — 生成与评分引擎
 
-生成：MiniMax API（MiniMax-M2.7，temperature 0.9）
-评分：MiniMax API（MiniMax-M2.7，temperature 0.3）
+生成：豆包 Doubao-Seed-2.0-lite（temperature 0.9）
+评分：豆包 Doubao-Seed-2.0-lite（temperature 0.3）
+战略：豆包 Doubao-Seed-2.0-pro（temperature 0.3，在 strategist.py 中调用）
 """
 
 import json
@@ -27,25 +28,35 @@ load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+_DOUBAO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+
 
 # ─────────────────────────────────────────
-# 两个独立的 LLM 客户端
+# 三个独立的 LLM 客户端
 # ─────────────────────────────────────────
 
 def _writer_client() -> OpenAI:
-    """MiniMax — 负责生成笑话"""
-    key = os.getenv("MINIMAX_API_KEY")
+    """豆包 lite — 负责生成笑话（快速）"""
+    key = os.getenv("DOUBAO_API_KEY")
     if not key:
-        raise RuntimeError("MINIMAX_API_KEY 未设置")
-    return OpenAI(api_key=key, base_url="https://api.minimax.chat/v1")
+        raise RuntimeError("DOUBAO_API_KEY 未设置")
+    return OpenAI(api_key=key, base_url=_DOUBAO_BASE_URL)
 
 
 def _judge_client() -> OpenAI:
-    """MiniMax — 负责评分"""
-    key = os.getenv("MINIMAX_API_KEY")
+    """豆包 lite — 负责评分（快速）"""
+    key = os.getenv("DOUBAO_API_KEY")
     if not key:
-        raise RuntimeError("MINIMAX_API_KEY 未设置")
-    return OpenAI(api_key=key, base_url="https://api.minimax.chat/v1")
+        raise RuntimeError("DOUBAO_API_KEY 未设置")
+    return OpenAI(api_key=key, base_url=_DOUBAO_BASE_URL)
+
+
+def _strategist_client() -> OpenAI:
+    """豆包 pro — 负责战略复盘（深度推理）"""
+    key = os.getenv("DOUBAO_API_KEY")
+    if not key:
+        raise RuntimeError("DOUBAO_API_KEY 未设置")
+    return OpenAI(api_key=key, base_url=_DOUBAO_BASE_URL)
 
 
 def _chat(client: OpenAI, model: str, prompt: str, temperature: float, max_tokens: int,
@@ -108,7 +119,7 @@ def generate(req: GenerationRequest) -> list[str]:
         .replace("{n}", str(req.n))
     )
 
-    model = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+    model = os.getenv("DOUBAO_WRITER_MODEL", "doubao-seed-2.0-lite-250315")
     text = _chat(_writer_client(), model, prompt, temperature=0.9, max_tokens=4000, role="writer")
     results = [item.strip() for item in text.split("===") if item.strip()]
     return results[:req.n] if len(results) > req.n else results
@@ -125,7 +136,7 @@ def score(text: str, content_type: ContentType) -> ScoreResult:
         .replace("{text}", text)
     )
 
-    model = os.getenv("MINIMAX_SCORE_MODEL", "MiniMax-Text-01")
+    model = os.getenv("DOUBAO_JUDGE_MODEL", "doubao-seed-2.0-lite-250315")
     last_error = None
     for _ in range(2):
         try:

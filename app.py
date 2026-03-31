@@ -957,6 +957,108 @@ def _page_monitor():
         with col_evo2:
             st.caption("每次进化会生成新变体并评分，保留最优 4 个，自动淘汰弱者。\n每日凌晨2点自动运行。")
 
+    st.markdown("---")
+    with st.expander("📚 知识库", expanded=False):
+        from db import get_knowledge, get_last_strategist_joke_id
+        from strategist import incremental_review
+
+        knowledge_type_labels = {
+            None: "全部",
+            "success_pattern": "成功规律",
+            "failure_pattern": "失败规律",
+            "humor_rule": "幽默规律",
+            "gene": "新基因",
+            "insight": "洞察",
+        }
+        knowledge_type = st.selectbox(
+            "知识类型",
+            options=list(knowledge_type_labels.keys()),
+            format_func=lambda v: knowledge_type_labels[v],
+            key="knowledge_type_filter",
+        )
+
+        col_k1, col_k2 = st.columns([1, 2])
+        with col_k1:
+            if st.button("🔬 立即复盘", key="btn_incremental_review", use_container_width=True):
+                try:
+                    since_id = get_last_strategist_joke_id()
+                    with st.spinner("战略师正在复盘最近数据……"):
+                        result = incremental_review(since_id)
+                    if result.get("skipped"):
+                        st.info(f"本次未触发复盘：{result.get('reason', '条件未满足')}")
+                    else:
+                        st.success(
+                            f"复盘完成，处理 {result['processed_count']} 条，"
+                            f"新增 {len(result.get('new_genes', []))} 个基因。"
+                        )
+                        if result.get("insight"):
+                            st.caption(result["insight"])
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"复盘失败：{exc}")
+        with col_k2:
+            st.caption("每满 50 条新笑话会自动触发一次增量复盘。这里可以手动对最近未复盘数据立即分析。")
+
+        entries = get_knowledge(entry_type=knowledge_type, limit=50)
+        if not entries:
+            st.info("知识库还没有可展示内容。")
+        else:
+            for entry in entries:
+                type_label = knowledge_type_labels.get(entry["entry_type"], entry["entry_type"])
+                content_type = entry.get("content_type")
+                content_label = CONTENT_TYPE_LABELS.get(ContentType(content_type), "跨类型") if content_type else "跨类型"
+                source_ids = entry.get("source_joke_ids") or []
+                source_text = f"来源 ID：{', '.join(str(i) for i in source_ids[:8])}" if source_ids else "来源 ID：无"
+                st.markdown(f"""
+                <div class="joke-card" style="margin-bottom:8px">
+                  <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px">
+                    <div>
+                      <span class="badge badge-type">{type_label}</span>
+                      <span style="font-size:12px;color:var(--muted);margin-left:8px">{content_label}</span>
+                    </div>
+                    <div style="font-size:12px;color:var(--muted)">
+                      相关度 {float(entry.get("relevance_score", 0.0)):.2f} · 使用 {int(entry.get("used_count", 0) or 0)} 次
+                    </div>
+                  </div>
+                  <div style="font-size:14px;color:var(--text);line-height:1.75">{entry['content']}</div>
+                  <div style="font-size:11px;color:var(--muted);margin-top:8px">{source_text} · {entry['created_at']}</div>
+                </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+    with st.expander("📰 项目日报", expanded=False):
+        from db import get_daily_reports
+        from strategist import generate_daily_report
+
+        reports = get_daily_reports(limit=7)
+
+        if st.button("📝 立即生成今日日报", key="btn_daily_report", use_container_width=True):
+            try:
+                with st.spinner("正在生成今日日报……"):
+                    generate_daily_report()
+                st.success("今日日报已生成。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"日报生成失败：{exc}")
+
+        if not reports:
+            st.info("还没有项目日报。")
+        else:
+            latest = reports[0]
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("日期", latest["report_date"])
+            stat_cols[1].metric("生成数", int(latest["total_generated"]))
+            stat_cols[2].metric("平均分", f"{float(latest['avg_score'] or 0):.2f}")
+            stat_cols[3].metric("知识增量", int(latest["new_patterns"]))
+
+            for report in reports:
+                title = f"{report['report_date']} · {int(report['total_generated'])} 条 · 均分 {float(report['avg_score'] or 0):.2f}"
+                with st.expander(title, expanded=(report is latest)):
+                    st.caption(
+                        f"新增知识 {int(report['new_patterns'])} 条 | "
+                        f"日报生成于 {report['created_at']}"
+                    )
+                    st.markdown(report["report_md"])
+
 
 # ─────────────────────────────────────────
 # 主入口

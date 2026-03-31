@@ -1,0 +1,31 @@
+你是 HumorRL 的自学习模块。你需要基于已有知识库，提炼更高层次的规律。
+
+## 当前知识库（按类型汇总）
+
+### 成功规律
+{success_patterns}
+
+### 失败规律
+{failure_patterns}
+
+### 幽默底层规律
+{humor_rules}
+
+### 数据统计
+- 总生成量：{total_count} 条
+- 全局均分：{avg_score}
+- 最高分：{max_score}，最低分：{min_score}
+- 人工标注量：{human_rated_count} 条
+
+## 自学习任务
+1. 找出知识库中相互印证的规律，提炼更通用的原则
+2. 找出矛盾或过时的规律（标记需要修正）
+3. 基于数量最多的成功案例，总结共同特征
+
+请输出 JSON：
+{{
+  "meta_rules": ["从多条规律中提炼的更高层次原则，每条20-50字"],
+  "contradictions": ["发现的矛盾规律描述（如有）"],
+  "top_features": ["高分内容的共同特征，可操作"],
+  "evolution_direction": "下阶段 Prompt 优化的核心方向（一句话）"
+}}

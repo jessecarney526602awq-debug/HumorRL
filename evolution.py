@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import db
-from contract import CONTENT_TYPE_LABELS, ContentType, PROMPT_PATHS
+from contract import CONTENT_TYPE_LABELS, ContentType
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -75,7 +75,7 @@ def crossover(parent_a: str, parent_b: str, seed: Optional[int] = None) -> tuple
     )
 
 
-MUTATION_GENE_POOL = [
+_STATIC_GENE_POOL = [
     "结构：三段式（背景→冲突→反转），包袱在最后一句",
     "结构：先给结论，再补充让人忍俊不禁的原因",
     "结构：一问一答，答案出人意料",
@@ -95,7 +95,23 @@ MUTATION_GENE_POOL = [
 ]
 
 
-def mutate(prompt_text: str, mutation_rate: float = 0.2, seed: Optional[int] = None) -> str:
+def _get_gene_pool(content_type=None, db_path=db.DB_PATH) -> list[str]:
+    """优先从知识库取动态基因，不足时补充静态兜底。"""
+    try:
+        dynamic = db.get_dynamic_gene_pool(content_type=content_type, limit=30, db_path=db_path)
+        if len(dynamic) >= 6:
+            return dynamic
+        return dynamic + _STATIC_GENE_POOL
+    except Exception:
+        return _STATIC_GENE_POOL
+
+
+def mutate(
+    prompt_text: str,
+    mutation_rate: float = 0.2,
+    seed: Optional[int] = None,
+    db_path: str = db.DB_PATH,
+) -> str:
     """
     随机变异：对每条基因以 mutation_rate 的概率执行以下操作之一：
     - 删除（若基因数 > 3，避免基因池耗尽）
@@ -106,13 +122,14 @@ def mutate(prompt_text: str, mutation_rate: float = 0.2, seed: Optional[int] = N
     rng = random.Random(seed)
     header, genes, footer = _parse_genes(prompt_text)
     new_genes = []
+    pool = _get_gene_pool(db_path=db_path)
 
     for gene in genes:
         if rng.random() < mutation_rate:
             action = rng.choice(["delete", "replace"])
             if action == "delete" and len(genes) > 3:
                 continue
-            new_genes.append(rng.choice(MUTATION_GENE_POOL))
+            new_genes.append(rng.choice(pool))
         else:
             new_genes.append(gene)
 
@@ -146,7 +163,7 @@ def evaluate_variant(
                 .replace("{n}", "1")
             )
             client = humor_engine._writer_client()
-            model = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+            model = os.getenv("DOUBAO_WRITER_MODEL", "doubao-seed-2.0-lite-250315")
             text = humor_engine._chat(client, model, filled, temperature=0.9, max_tokens=1500, role="writer")
             text = text.split("===")[0].strip()
             if not text:
@@ -225,6 +242,7 @@ def run_evolution(
                     base["prompt_text"],
                     mutation_rate=mutation_rate,
                     seed=generation_index * 100 + child_index,
+                    db_path=db_path,
                 )
                 variant_id = db.save_prompt_variant(
                     content_type=content_type.value,
@@ -264,6 +282,7 @@ def run_evolution(
                             parent_a["prompt_text"],
                             mutation_rate=mutation_rate,
                             seed=generation_index * 100 + pair_index,
+                            db_path=db_path,
                         ),
                     )
                     parent_ids = [parent_a["id"]]
@@ -274,7 +293,7 @@ def run_evolution(
                         break
                     candidate_text = child_text
                     if random.random() < mutation_rate:
-                        candidate_text = mutate(candidate_text, mutation_rate=mutation_rate)
+                        candidate_text = mutate(candidate_text, mutation_rate=mutation_rate, db_path=db_path)
                     variant_id = db.save_prompt_variant(
                         content_type=content_type.value,
                         prompt_text=candidate_text,

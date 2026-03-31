@@ -70,6 +70,17 @@ def job_batch_generate():
         saved_id = db.save_joke(joke)
         logger.info(f"已生成并存储，id={saved_id}，得分={joke.score.weighted_total:.2f}")
 
+        try:
+            from strategist import maybe_trigger
+
+            result = maybe_trigger()
+            if result and not result.get("skipped"):
+                insight = result.get("insight", "")
+                n_genes = len(result.get("new_genes", []))
+                logger.info(f"战略师复盘完成 | 新基因={n_genes} | 洞察：{insight[:50]}")
+        except Exception as exc:
+            logger.warning(f"战略师触发检查失败（不影响主流程）：{exc}")
+
         if alert.level == 1:
             logger.warning(f"Reward Hacking L1 预警：{alert.action}")
 
@@ -135,6 +146,19 @@ def job_evolution():
     logger.info("=== Prompt 进化任务结束 ===")
 
 
+def job_daily_report():
+    """每天 23:55 生成项目日报。"""
+    from strategist import generate_daily_report
+
+    logger.info("=== 项目日报任务开始 ===")
+    try:
+        report = generate_daily_report()
+        logger.info(f"项目日报生成完成：{report[:200]}")
+    except Exception as exc:
+        logger.error(f"项目日报生成失败：{exc}", exc_info=True)
+    logger.info("=== 项目日报任务结束 ===")
+
+
 def main():
     db.init_db()
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
@@ -142,6 +166,7 @@ def main():
     scheduler.add_job(job_batch_generate, "cron", minute=0)
     scheduler.add_job(job_health_check, "cron", hour="0,6,12,18", minute=5)
     scheduler.add_job(job_evolution, "cron", hour=2, minute=0)
+    scheduler.add_job(job_daily_report, "cron", hour=23, minute=55)
 
     logger.info("调度器启动，按 Ctrl+C 退出")
     logger.info(f"每日 token 上限：{DAILY_TOKEN_LIMIT:,}")

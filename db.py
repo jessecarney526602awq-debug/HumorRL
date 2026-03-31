@@ -77,6 +77,33 @@ CREATE TABLE IF NOT EXISTS prompt_variants (
 );
 CREATE INDEX IF NOT EXISTS idx_variants_type ON prompt_variants(content_type);
 CREATE INDEX IF NOT EXISTS idx_variants_gen  ON prompt_variants(generation);
+
+CREATE TABLE IF NOT EXISTS knowledge_base (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_type    TEXT,
+    entry_type      TEXT    NOT NULL,
+    content         TEXT    NOT NULL,
+    source_joke_ids TEXT    NOT NULL DEFAULT '',
+    relevance_score REAL    NOT NULL DEFAULT 1.0,
+    used_count      INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kb_entry_type ON knowledge_base(entry_type);
+CREATE INDEX IF NOT EXISTS idx_kb_ct         ON knowledge_base(content_type);
+CREATE INDEX IF NOT EXISTS idx_kb_score      ON knowledge_base(relevance_score DESC);
+
+CREATE TABLE IF NOT EXISTS daily_reports (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date    TEXT    NOT NULL UNIQUE,
+    total_generated INTEGER NOT NULL DEFAULT 0,
+    avg_score      REAL    NOT NULL DEFAULT 0.0,
+    new_patterns   INTEGER NOT NULL DEFAULT 0,
+    best_joke_id   INTEGER,
+    report_md      TEXT    NOT NULL,
+    created_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_date ON daily_reports(report_date DESC);
 """
 
 PRESET_PERSONAS = [
@@ -523,3 +550,147 @@ def seed_prompt_variants(db_path: str = DB_PATH) -> None:
                     "VALUES (?, 0, ?, '', 0, 0.0, 0.0, 1, ?)",
                     (ct.value, text, _now()),
                 )
+
+
+def save_knowledge(
+    entry_type: str,
+    content: str,
+    content_type: Optional[str] = None,
+    source_joke_ids: list[int] = None,
+    relevance_score: float = 1.0,
+    db_path: str = DB_PATH,
+) -> int:
+    """存入知识库。entry_type 见上方枚举。"""
+    now = _now()
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO knowledge_base "
+            "(content_type, entry_type, content, source_joke_ids, relevance_score, used_count, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            (
+                content_type,
+                entry_type,
+                content,
+                ",".join(str(i) for i in (source_joke_ids or [])),
+                relevance_score,
+                now,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_knowledge(
+    entry_type: Optional[str] = None,
+    content_type: Optional[str] = None,
+    limit: int = 20,
+    db_path: str = DB_PATH,
+) -> list[dict]:
+    """按 relevance_score DESC 返回知识条目。"""
+    conditions, params = ["1=1"], []
+    if entry_type:
+        conditions.append("entry_type = ?")
+        params.append(entry_type)
+    if content_type:
+        conditions.append("(content_type = ? OR content_type IS NULL)")
+        params.append(content_type)
+    params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM knowledge_base WHERE {' AND '.join(conditions)} "
+            f"ORDER BY relevance_score DESC LIMIT ?",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_dynamic_gene_pool(
+    content_type: Optional[str] = None,
+    limit: int = 30,
+    db_path: str = DB_PATH,
+) -> list[str]:
+    """从知识库取 entry_type='gene' 的内容，供 evolution 使用。"""
+    rows = get_knowledge(
+        entry_type="gene",
+        content_type=content_type,
+        limit=limit,
+        db_path=db_path,
+    )
+    return [r["content"] for r in rows]
+
+
+def increment_knowledge_used(knowledge_id: int, db_path: str = DB_PATH) -> None:
+    now = _now()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE knowledge_base SET used_count=used_count+1, updated_at=? WHERE id=?",
+            (now, knowledge_id),
+        )
+
+
+def save_daily_report(
+    report_date: str,
+    total_generated: int,
+    avg_score: float,
+    new_patterns: int,
+    best_joke_id: Optional[int],
+    report_md: str,
+    db_path: str = DB_PATH,
+) -> int:
+    """保存日报（upsert：同一天只保留最新一份）。"""
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM daily_reports WHERE report_date = ?", (report_date,))
+        cur = conn.execute(
+            "INSERT INTO daily_reports "
+            "(report_date, total_generated, avg_score, new_patterns, best_joke_id, report_md, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                report_date,
+                total_generated,
+                avg_score,
+                new_patterns,
+                best_joke_id,
+                report_md,
+                _now(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_daily_reports(limit: int = 7, db_path: str = DB_PATH) -> list[dict]:
+    """返回最近 limit 天的日报，按日期降序。"""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_jokes_since(since_id: int, db_path: str = DB_PATH) -> int:
+    """统计 id > since_id 的笑话数量，用于触发战略师。"""
+    with _connect(db_path) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM jokes WHERE id > ? AND score_total IS NOT NULL",
+            (since_id,),
+        ).fetchone()[0]
+
+
+def get_last_strategist_joke_id(db_path: str = DB_PATH) -> int:
+    """返回上次战略师运行时最新的 joke id，用于增量复盘。存在 knowledge_base 的特殊记录里。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT content FROM knowledge_base WHERE entry_type='_checkpoint' LIMIT 1"
+        ).fetchone()
+    return int(row["content"]) if row else 0
+
+
+def set_last_strategist_joke_id(joke_id: int, db_path: str = DB_PATH) -> None:
+    """更新战略师检查点。"""
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM knowledge_base WHERE entry_type='_checkpoint'")
+        conn.execute(
+            "INSERT INTO knowledge_base (entry_type, content, source_joke_ids, relevance_score, created_at, updated_at) "
+            "VALUES ('_checkpoint', ?, '', 0, ?, ?)",
+            (str(joke_id), _now(), _now()),
+        )
