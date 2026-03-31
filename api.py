@@ -348,6 +348,30 @@ def get_variants_api(content_type: str) -> list[PromptVariantModel]:
     return [PromptVariantModel(**item) for item in db.get_active_variants(content_type)]
 
 
+@app.post("/api/training/trigger")
+def trigger_training():
+    """手动触发一次完整训练周期（后台线程，立即返回）。"""
+    import threading
+    # 如果 batch_generate 正在运行，拒绝重复触发
+    jobs = db.get_job_statuses()
+    running = next((j for j in jobs if j["job_name"] == "batch_generate" and j["last_status"] == "running"), None)
+    if running:
+        raise HTTPException(status_code=409, detail="训练周期已在运行中")
+    db.set_stop_flag(False)
+    def _run():
+        from scheduler import job_training_cycle
+        job_training_cycle()
+    threading.Thread(target=_run, daemon=True).start()
+    return {"started": True}
+
+
+@app.post("/api/training/stop")
+def stop_training():
+    """请求终止当前训练周期（在下一轮生成完后生效）。"""
+    db.set_stop_flag(True)
+    return {"stop_requested": True}
+
+
 @app.get("/api/scheduler/status")
 def get_scheduler_status():
     jobs = db.get_job_statuses()
@@ -370,9 +394,13 @@ def get_scheduler_status():
     genes = [e for e in all_kb if e["entry_type"] == "gene"]
     rules = [e for e in all_kb if e["entry_type"] == "humor_rule"]
 
+    batch_job = next((j for j in jobs if j["job_name"] == "batch_generate"), None)
+    is_training = bool(batch_job and batch_job.get("last_status") == "running")
+
     return {
         "is_alive": is_alive,
-        "jobs": [j for j in jobs if j["job_name"] != "heartbeat"],
+        "is_training": is_training,
+        "jobs": [j for j in jobs if j["job_name"] not in ("heartbeat", "training_stop")],
         "training_progress": {
             "jokes_since_last_review": jokes_since,
             "trigger_interval": interval,

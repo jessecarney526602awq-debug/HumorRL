@@ -772,6 +772,35 @@ def get_job_statuses(db_path: str = DB_PATH) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_stop_flag(db_path: str = DB_PATH) -> bool:
+    """返回是否有手动停止训练的请求。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT last_status FROM scheduler_jobs WHERE job_name='training_stop'"
+        ).fetchone()
+    return bool(row and row["last_status"] == "requested")
+
+
+def set_stop_flag(requested: bool, db_path: str = DB_PATH) -> None:
+    """设置或清除停止标志。"""
+    status = "requested" if requested else "cleared"
+    now = _now()
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM scheduler_jobs WHERE job_name='training_stop'"
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE scheduler_jobs SET last_status=?, updated_at=? WHERE job_name='training_stop'",
+                (status, now),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO scheduler_jobs (job_name, last_status, run_count, updated_at) VALUES (?,?,0,?)",
+                ("training_stop", status, now),
+            )
+
+
 def get_current_directive(db_path: str = DB_PATH) -> str:
     """
     返回战略师最新下发的生成指令。

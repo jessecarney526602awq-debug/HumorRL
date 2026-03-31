@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { getSchedulerStatus, triggerTraining, stopTraining } from '../api/endpoints'
 
 const navItems = [
   { to: '/', label: '生成', icon: 'bolt' },
@@ -16,6 +18,60 @@ function itemClass(active: boolean) {
       ? 'border-l-2 border-black bg-white font-semibold text-black'
       : 'font-medium text-gray-400 hover:text-black',
   ].join(' ')
+}
+
+function TrainingButton() {
+  const [isTraining, setIsTraining] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const s = await getSchedulerStatus()
+        setIsTraining(s.is_training)
+      } catch {}
+    }
+    check()
+    const t = setInterval(check, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const handleClick = async () => {
+    setLoading(true)
+    try {
+      if (isTraining) {
+        await stopTraining()
+        setIsTraining(false)
+      } else {
+        await triggerTraining()
+        setIsTraining(true)
+      }
+    } catch {}
+    setLoading(false)
+  }
+
+  if (isTraining) {
+    return (
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        className="w-full rounded-lg border border-black py-3 text-xs font-bold tracking-[0.15em] text-black transition-opacity hover:opacity-70 flex items-center justify-center gap-2"
+      >
+        <span className="inline-block h-2 w-2 rounded-full bg-black animate-pulse" />
+        {loading ? '处理中...' : '训练中  终止'}
+      </button>
+    )
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={loading}
+      className="w-full rounded-lg bg-black py-3 text-xs font-bold tracking-[0.15em] text-white transition-opacity hover:opacity-90"
+    >
+      {loading ? '启动中...' : '开始训练 →'}
+    </button>
+  )
 }
 
 export default function Sidebar() {
@@ -44,9 +100,7 @@ export default function Sidebar() {
           ))}
         </nav>
         <div className="mt-8 px-6">
-          <button className="w-full rounded-lg bg-black py-3 text-xs font-bold tracking-[0.15em] text-white transition-opacity hover:opacity-90">
-            新建任务
-          </button>
+          <TrainingButton />
         </div>
       </div>
       <div className="px-6">

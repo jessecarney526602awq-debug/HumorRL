@@ -86,6 +86,10 @@ def job_training_cycle():
     deadline = time.time() + GENERATE_WINDOW_MINUTES * 60
 
     while time.time() < deadline:
+        if db.get_stop_flag():
+            logger.info("收到手动停止指令，提前结束生成窗口")
+            db.set_stop_flag(False)
+            break
         if not _check_daily_budget():
             logger.warning("token 预算耗尽，提前结束生成窗口")
             break

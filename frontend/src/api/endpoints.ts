@@ -277,6 +277,7 @@ export interface SchedulerJob {
 
 export interface SchedulerStatus {
   is_alive: boolean
+  is_training: boolean
   jobs: SchedulerJob[]
   training_progress: {
     jokes_since_last_review: number
@@ -292,6 +293,16 @@ export interface SchedulerStatus {
 
 export async function getSchedulerStatus() {
   const { data } = await client.get<SchedulerStatus>('/scheduler/status')
+  return data
+}
+
+export async function triggerTraining() {
+  const { data } = await client.post<{ started: boolean }>('/training/trigger')
+  return data
+}
+
+export async function stopTraining() {
+  const { data } = await client.post<{ stop_requested: boolean }>('/training/stop')
   return data
 }
 
