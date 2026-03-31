@@ -29,8 +29,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DAILY_TOKEN_LIMIT = int(os.getenv("DAILY_TOKEN_LIMIT", "500000"))
-# 生成批次间隔（分钟）。默认60，可改小加速训练（如 BATCH_INTERVAL_MINUTES=10）
-BATCH_INTERVAL_MINUTES = int(os.getenv("BATCH_INTERVAL_MINUTES", "60"))
+# 生成批次间隔（分钟）。
+BATCH_INTERVAL_MINUTES = int(os.getenv("BATCH_INTERVAL_MINUTES", "30"))
+# 每种内容类型每批生成几条候选（全部打分存入）。
+BATCH_SIZE_PER_TYPE = int(os.getenv("BATCH_SIZE_PER_TYPE", "5"))
 
 
 def _check_daily_budget() -> bool:
@@ -49,7 +51,11 @@ def job_heartbeat():
 
 
 def job_batch_generate():
-    """定时批量生成任务（每小时执行一次）。"""
+    """
+    批量生成任务（每 BATCH_INTERVAL_MINUTES 分钟执行一次）。
+    遍历所有内容类型，每种生成 BATCH_SIZE_PER_TYPE 条候选，全部打分，全部存入 DB。
+    """
+    from contract import ContentType
     logger.info("=== 批量生成任务开始 ===")
     db.upsert_job_status("batch_generate", "running")
 
@@ -57,43 +63,53 @@ def job_batch_generate():
         db.upsert_job_status("batch_generate", "success", {"skipped": "budget"})
         return
 
-    try:
-        content_type = strategy.ucb1_select_content_type()
-        logger.info(f"UCB1 选择类型：{content_type.value}")
+    alert = monitor.detect_reward_hacking()
+    if alert.level >= 2:
+        logger.warning(f"Reward Hacking L{alert.level}，停止生成：{alert.message}")
+        db.upsert_job_status("batch_generate", "success", {"skipped": f"hacking_l{alert.level}"})
+        return
 
-        alert = monitor.detect_reward_hacking()
-        if alert.level >= 2:
-            logger.warning(f"Reward Hacking L{alert.level} 检测到，停止生成：{alert.message}")
-            db.upsert_job_status("batch_generate", "success", {"skipped": f"hacking_l{alert.level}"})
-            return
+    total_saved = 0
+    total_score = 0.0
+    errors = []
 
-        req = GenerationRequest(content_type=content_type, n=3)
-        joke = humor_engine.generate_and_pick_best(req)
-        saved_id = db.save_joke(joke)
-        score = joke.score.weighted_total if joke.score else 0
-        logger.info(f"已生成并存储，id={saved_id}，得分={score:.2f}")
-
+    for content_type in ContentType:
+        if not _check_daily_budget():
+            logger.warning("token 预算耗尽，提前结束本批次")
+            break
         try:
-            from strategist import maybe_trigger
-            result = maybe_trigger()
-            if result and not result.get("skipped"):
-                insight = result.get("insight", "")
-                n_genes = len(result.get("new_genes", []))
-                logger.info(f"战略师复盘完成 | 新基因={n_genes} | 洞察：{insight[:50]}")
+            req = GenerationRequest(content_type=content_type, n=BATCH_SIZE_PER_TYPE)
+            jokes = humor_engine.generate_and_score_all(req)
+            for joke in jokes:
+                saved_id = db.save_joke(joke)
+                s = joke.score.weighted_total if joke.score else 0
+                total_score += s
+                total_saved += 1
+                logger.info(f"  [{content_type.value}] id={saved_id} 得分={s:.2f}")
         except Exception as exc:
-            logger.warning(f"战略师触发检查失败（不影响主流程）：{exc}")
+            logger.error(f"  [{content_type.value}] 生成失败：{exc}", exc_info=True)
+            errors.append(f"{content_type.value}:{exc}")
 
-        if alert.level == 1:
-            logger.warning(f"Reward Hacking L1 预警：{alert.action}")
+    avg_score = total_score / total_saved if total_saved else 0.0
+    logger.info(f"本批次共存入 {total_saved} 条，平均得分 {avg_score:.2f}")
 
-        db.upsert_job_status("batch_generate", "success", {
-            "saved_id": saved_id, "score": round(score, 2), "type": content_type.value
-        })
+    if alert.level == 1:
+        logger.warning(f"Reward Hacking L1 预警：{alert.action}")
 
+    try:
+        from strategist import maybe_trigger
+        result = maybe_trigger()
+        if result and not result.get("skipped"):
+            n_genes = len(result.get("new_genes", []))
+            directive = result.get("next_directive", "")
+            logger.info(f"战略师复盘完成 | 新基因={n_genes} | 指令：{directive[:60]}")
     except Exception as exc:
-        logger.error(f"批量生成任务失败：{exc}", exc_info=True)
-        db.upsert_job_status("batch_generate", "error", {"error": str(exc)})
+        logger.warning(f"战略师触发检查失败（不影响主流程）：{exc}")
 
+    db.upsert_job_status("batch_generate", "success" if not errors else "error", {
+        "saved": total_saved, "avg_score": round(avg_score, 2),
+        "errors": errors[:3] if errors else None,
+    })
     logger.info("=== 批量生成任务结束 ===")
 
 

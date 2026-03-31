@@ -169,6 +169,41 @@ def score(text: str, content_type: ContentType) -> ScoreResult:
     return _default_score(f"评分解析失败，已回退默认分。错误：{last_error}")
 
 
+def generate_and_score_all(req: GenerationRequest) -> list[JokeRecord]:
+    """生成 N 条 → 并行评分 → 全部返回（用于训练批次，不丢弃低分内容）。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    candidates = generate(req)
+    if not candidates:
+        raise RuntimeError("模型未返回可用内容")
+
+    scores: dict[int, ScoreResult] = {}
+    with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+        future_to_idx = {
+            executor.submit(score, text, req.content_type): i
+            for i, text in enumerate(candidates)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                scores[idx] = future.result()
+            except Exception as exc:
+                scores[idx] = _default_score(f"并行评分失败：{exc}")
+
+    return [
+        JokeRecord(
+            id=None,
+            content_type=req.content_type,
+            text=candidates[i],
+            persona_id=req.persona.id if req.persona else None,
+            score=scores[i],
+            human_rating=None,
+            human_reaction=None,
+        )
+        for i in range(len(candidates))
+    ]
+
+
 def generate_and_pick_best(req: GenerationRequest) -> JokeRecord:
     """生成 N 条 → 并行评分 → 返回总分最高的那条。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
