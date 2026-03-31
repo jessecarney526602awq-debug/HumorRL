@@ -29,6 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DAILY_TOKEN_LIMIT = int(os.getenv("DAILY_TOKEN_LIMIT", "500000"))
+# 生成批次间隔（分钟）。默认60，可改小加速训练（如 BATCH_INTERVAL_MINUTES=10）
+BATCH_INTERVAL_MINUTES = int(os.getenv("BATCH_INTERVAL_MINUTES", "60"))
 
 
 def _check_daily_budget() -> bool:
@@ -175,13 +177,15 @@ def main():
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
 
     scheduler.add_job(job_heartbeat, "interval", minutes=1)
-    scheduler.add_job(job_batch_generate, "cron", minute=0)
+    scheduler.add_job(job_batch_generate, "interval", minutes=BATCH_INTERVAL_MINUTES)
     scheduler.add_job(job_health_check, "cron", hour="0,6,12,18", minute=5)
     scheduler.add_job(job_evolution, "cron", hour=2, minute=0)
     scheduler.add_job(job_daily_report, "cron", hour=23, minute=55)
 
     logger.info("调度器启动，按 Ctrl+C 退出")
     logger.info(f"每日 token 上限：{DAILY_TOKEN_LIMIT:,}")
+    logger.info(f"批量生成间隔：{BATCH_INTERVAL_MINUTES} 分钟")
+    logger.info(f"战略师触发阈值：{os.getenv('STRATEGIST_TRIGGER_INTERVAL', '10')} 条新内容")
 
     try:
         scheduler.start()

@@ -113,10 +113,20 @@ def generate(req: GenerationRequest) -> list[str]:
     if req.persona is not None:
         persona_block = f"你的角色设定：\n{req.persona.style_prompt}"
 
+    # 从 DB 读取战略师最新指令（无指令时留空，生成端自主发挥）
+    strategy_context = ""
+    try:
+        directive = db.get_current_directive()
+        if directive:
+            strategy_context = directive
+    except Exception:
+        pass
+
     prompt = (
         prompt.replace("{persona_block}", persona_block)
         .replace("{topic}", req.topic or "（随机选择一个日常生活话题）")
         .replace("{n}", str(req.n))
+        .replace("{strategy_context}", strategy_context or "（战略师暂无特别指令，按默认风格创作）")
     )
 
     model = os.getenv("DOUBAO_WRITER_MODEL", "doubao-seed-2.0-lite-250315")

@@ -770,3 +770,17 @@ def get_job_statuses(db_path: str = DB_PATH) -> list[dict]:
             "SELECT * FROM scheduler_jobs ORDER BY job_name"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_current_directive(db_path: str = DB_PATH) -> str:
+    """
+    返回战略师最新下发的生成指令。
+    指令以 entry_type='generation_directive' 存储在 knowledge_base 里。
+    没有时返回空字符串（生成端按默认行为执行）。
+    """
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT content FROM knowledge_base WHERE entry_type='generation_directive' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    return row["content"] if row else ""

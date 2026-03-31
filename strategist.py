@@ -20,6 +20,15 @@ REVIEW_PROMPT_PATH = "prompts/strategist/review.txt"
 SELF_LEARN_PROMPT_PATH = "prompts/strategist/self_learn.txt"
 DAILY_REPORT_PROMPT_PATH = "prompts/strategist/daily_report.txt"
 PERSONA_GEN_PROMPT_PATH = "prompts/strategist/persona_gen.txt"
+THEORY_FOUNDATION_PATH = "prompts/strategist/theory_foundation.txt"
+
+
+def _load_theory_foundation() -> str:
+    """加载幽默底层理论参考，失败时静默返回空字符串。"""
+    try:
+        return humor_engine._read_prompt(THEORY_FOUNDATION_PATH)
+    except Exception:
+        return ""
 
 
 def _pro_chat(prompt: str, max_tokens: int = 2000) -> str:
@@ -96,6 +105,9 @@ def incremental_review(
     human_feedback = [j for j in jokes if j.human_rating is not None]
 
     prompt = humor_engine._read_prompt(REVIEW_PROMPT_PATH).replace(
+        "{theory_foundation}",
+        _load_theory_foundation(),
+    ).replace(
         "{existing_knowledge}",
         _knowledge_summary(db_path=db_path),
     ).replace(
@@ -150,6 +162,17 @@ def incremental_review(
         )
         existing.add(insight)
 
+    # 保存生成指令（战略师 → 生成端 的直接传递）
+    next_directive = str(result.get("next_directive", "")).strip()
+    if next_directive:
+        db.save_knowledge(
+            entry_type="generation_directive",
+            content=next_directive,
+            source_joke_ids=source_ids,
+            relevance_score=1.5,
+            db_path=db_path,
+        )
+
     latest_id = max(j.id for j in jokes if j.id is not None)
     db.set_last_strategist_joke_id(latest_id, db_path=db_path)
 
@@ -161,6 +184,7 @@ def incremental_review(
         "humor_rules": saved_rules,
         "new_genes": saved_genes,
         "insight": insight,
+        "next_directive": next_directive,
         "best_joke_id": result.get("best_joke_id"),
         "confidence": float(result.get("confidence", 0.0) or 0.0),
     }
@@ -304,7 +328,7 @@ def maybe_trigger(db_path: str = db.DB_PATH) -> Optional[dict]:
     检查是否需要触发战略师复盘。
     条件：距上次运行后新增 >= STRATEGIST_TRIGGER_INTERVAL 条（默认50）。
     """
-    interval = int(os.getenv("STRATEGIST_TRIGGER_INTERVAL", "50"))
+    interval = int(os.getenv("STRATEGIST_TRIGGER_INTERVAL", "10"))
     last_id = db.get_last_strategist_joke_id(db_path=db_path)
 
     with db._connect(db_path) as conn:
