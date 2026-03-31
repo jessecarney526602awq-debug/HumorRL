@@ -104,6 +104,16 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     created_at     TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_date ON daily_reports(report_date DESC);
+
+CREATE TABLE IF NOT EXISTS scheduler_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_name    TEXT    NOT NULL UNIQUE,
+    last_run_at TEXT,
+    last_status TEXT    NOT NULL DEFAULT 'idle',
+    last_result TEXT,
+    run_count   INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL
+);
 """
 
 PRESET_PERSONAS = [
@@ -718,3 +728,41 @@ def set_last_strategist_joke_id(joke_id: int, db_path: str = DB_PATH) -> None:
             "VALUES ('_checkpoint', ?, '', 0, ?, ?)",
             (str(joke_id), _now(), _now()),
         )
+
+
+def upsert_job_status(
+    job_name: str,
+    status: str,
+    result: dict = None,
+    db_path: str = DB_PATH,
+) -> None:
+    """调度器每个 job 开始/结束时调用，幂等更新状态。"""
+    import json as _json
+    now = _now()
+    result_str = _json.dumps(result, ensure_ascii=False) if result else None
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id, run_count FROM scheduler_jobs WHERE job_name=?", (job_name,)
+        ).fetchone()
+        if existing:
+            new_count = existing["run_count"] + (1 if status == "success" else 0)
+            conn.execute(
+                "UPDATE scheduler_jobs SET last_run_at=?, last_status=?, last_result=?, "
+                "run_count=?, updated_at=? WHERE job_name=?",
+                (now, status, result_str, new_count, now, job_name),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO scheduler_jobs (job_name, last_run_at, last_status, last_result, run_count, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (job_name, now, status, result_str, 1 if status == "success" else 0, now),
+            )
+
+
+def get_job_statuses(db_path: str = DB_PATH) -> list[dict]:
+    """返回所有 job 的最新状态，供 API 读取。"""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_jobs ORDER BY job_name"
+        ).fetchall()
+    return [dict(r) for r in rows]

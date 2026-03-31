@@ -41,19 +41,18 @@ def _check_daily_budget() -> bool:
     return True
 
 
+def job_heartbeat():
+    """每分钟写一次心跳，前端用来判断调度器是否存活。"""
+    db.upsert_job_status("heartbeat", "success")
+
+
 def job_batch_generate():
-    """
-    定时批量生成任务（每小时执行一次）。
-    流程：
-    1. 检查每日 token 预算
-    2. 用 UCB1 选择内容类型
-    3. 生成 1 条最优内容（Best-of-3，节省 token）
-    4. 存入 DB
-    5. 检测 Reward Hacking，L2 及以上则停止本次生成
-    """
+    """定时批量生成任务（每小时执行一次）。"""
     logger.info("=== 批量生成任务开始 ===")
+    db.upsert_job_status("batch_generate", "running")
 
     if not _check_daily_budget():
+        db.upsert_job_status("batch_generate", "success", {"skipped": "budget"})
         return
 
     try:
@@ -63,16 +62,17 @@ def job_batch_generate():
         alert = monitor.detect_reward_hacking()
         if alert.level >= 2:
             logger.warning(f"Reward Hacking L{alert.level} 检测到，停止生成：{alert.message}")
+            db.upsert_job_status("batch_generate", "success", {"skipped": f"hacking_l{alert.level}"})
             return
 
         req = GenerationRequest(content_type=content_type, n=3)
         joke = humor_engine.generate_and_pick_best(req)
         saved_id = db.save_joke(joke)
-        logger.info(f"已生成并存储，id={saved_id}，得分={joke.score.weighted_total:.2f}")
+        score = joke.score.weighted_total if joke.score else 0
+        logger.info(f"已生成并存储，id={saved_id}，得分={score:.2f}")
 
         try:
             from strategist import maybe_trigger
-
             result = maybe_trigger()
             if result and not result.get("skipped"):
                 insight = result.get("insight", "")
@@ -84,20 +84,21 @@ def job_batch_generate():
         if alert.level == 1:
             logger.warning(f"Reward Hacking L1 预警：{alert.action}")
 
+        db.upsert_job_status("batch_generate", "success", {
+            "saved_id": saved_id, "score": round(score, 2), "type": content_type.value
+        })
+
     except Exception as exc:
         logger.error(f"批量生成任务失败：{exc}", exc_info=True)
+        db.upsert_job_status("batch_generate", "error", {"error": str(exc)})
 
     logger.info("=== 批量生成任务结束 ===")
 
 
 def job_health_check():
-    """
-    定时健康检查（每6小时执行一次）。
-    - 输出多样性报告
-    - 输出 Reward Hacking 检测结果
-    - 输出今日 token 用量
-    """
+    """定时健康检查（每6小时执行一次）。"""
     logger.info("=== 健康检查 ===")
+    db.upsert_job_status("health_check", "running")
     try:
         diversity = monitor.compute_diversity()
         logger.info(f"多样性熵：{diversity.entropy:.3f}（{diversity.interpretation}）")
@@ -107,41 +108,48 @@ def job_health_check():
 
         cost = db.get_cost_stats(days=1)
         logger.info(f"今日 token 用量：{cost['total_tokens']:,} / {DAILY_TOKEN_LIMIT:,}")
+
+        db.upsert_job_status("health_check", "success", {
+            "diversity": round(diversity.entropy, 3),
+            "hacking_level": alert.level,
+            "tokens_today": cost["total_tokens"],
+        })
     except Exception as exc:
         logger.error(f"健康检查失败：{exc}", exc_info=True)
+        db.upsert_job_status("health_check", "error", {"error": str(exc)})
 
 
 def job_evolution():
-    """每天凌晨2点运行 Prompt 遗传算法（逐类型轮换，每次只进化一种类型节省成本）。"""
+    """每天凌晨2点运行 Prompt 遗传算法。"""
     import datetime
-
     from contract import ContentType
     from evolution import run_evolution
 
     logger.info("=== Prompt 进化任务开始 ===")
+    db.upsert_job_status("evolution", "running")
 
     if not _check_daily_budget():
+        db.upsert_job_status("evolution", "success", {"skipped": "budget"})
         return
 
     weekday = datetime.datetime.now().weekday()
-    types = list(ContentType)
-    content_type = types[weekday % len(types)]
+    content_type = list(ContentType)[weekday % len(list(ContentType))]
     logger.info(f"本次进化类型：{content_type.value}")
 
     try:
-        report = run_evolution(
-            content_type=content_type,
-            population_size=6,
-            generations=2,
-            eval_n=2,
-        )
+        report = run_evolution(content_type=content_type, population_size=6, generations=2, eval_n=2)
         logger.info(
             f"进化完成 | 最佳变体 id={report['best_variant_id']} "
-            f"分数={report['best_score']:.2f} "
-            f"提升={report['improvement']:+.2f}"
+            f"分数={report['best_score']:.2f} 提升={report['improvement']:+.2f}"
         )
+        db.upsert_job_status("evolution", "success", {
+            "type": content_type.value,
+            "best_score": round(report["best_score"], 2),
+            "improvement": round(report["improvement"], 2),
+        })
     except Exception as exc:
         logger.error(f"Prompt 进化失败：{exc}", exc_info=True)
+        db.upsert_job_status("evolution", "error", {"error": str(exc)})
 
     logger.info("=== Prompt 进化任务结束 ===")
 
@@ -151,11 +159,14 @@ def job_daily_report():
     from strategist import generate_daily_report
 
     logger.info("=== 项目日报任务开始 ===")
+    db.upsert_job_status("daily_report", "running")
     try:
         report = generate_daily_report()
         logger.info(f"项目日报生成完成：{report[:200]}")
+        db.upsert_job_status("daily_report", "success", {"preview": report[:100]})
     except Exception as exc:
         logger.error(f"项目日报生成失败：{exc}", exc_info=True)
+        db.upsert_job_status("daily_report", "error", {"error": str(exc)})
     logger.info("=== 项目日报任务结束 ===")
 
 
@@ -163,6 +174,7 @@ def main():
     db.init_db()
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
 
+    scheduler.add_job(job_heartbeat, "interval", minutes=1)
     scheduler.add_job(job_batch_generate, "cron", minute=0)
     scheduler.add_job(job_health_check, "cron", hour="0,6,12,18", minute=5)
     scheduler.add_job(job_evolution, "cron", hour=2, minute=0)
