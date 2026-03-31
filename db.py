@@ -274,3 +274,68 @@ def get_stats(db_path: str = DB_PATH) -> dict:
             for r in recent
         ],
     }
+
+
+def _row_to_joke_record(row: sqlite3.Row) -> JokeRecord:
+    score = None
+    if row["score_structure"] is not None:
+        score = ScoreResult(
+            structure=row["score_structure"],
+            surprise=row["score_surprise"],
+            relatability=row["score_relatability"],
+            language=row["score_language"],
+            creativity=row["score_creativity"],
+            safety=row["score_safety"],
+            reasoning=row["score_reasoning"] or "",
+        )
+
+    return JokeRecord(
+        id=row["id"],
+        content_type=ContentType(row["content_type"]),
+        text=row["text"],
+        persona_id=row["persona_id"],
+        score=score,
+        human_rating=row["human_rating"],
+        human_reaction=row["human_reaction"],
+        created_at=datetime.datetime.fromisoformat(row["created_at"]),
+        parent_id=row["parent_id"],
+        rewrite_round=row["rewrite_round"],
+    )
+
+
+def get_joke_by_id(joke_id: int, db_path: str = DB_PATH) -> Optional[JokeRecord]:
+    """按 id 查单条，复用 get_jokes 中的行解析逻辑。不存在返回 None。"""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM jokes WHERE id = ?", (joke_id,)).fetchone()
+    if row is None:
+        return None
+    return _row_to_joke_record(row)
+
+
+def get_rewrite_chain(root_id: int, db_path: str = DB_PATH) -> list[JokeRecord]:
+    """
+    返回以 root_id 为根的完整改写链（含原始），按 rewrite_round 升序。
+    用迭代（不用递归）：
+      current_id = root_id
+      while current_id:
+          record = get_joke_by_id(current_id)
+          chain.append(record)
+          查找 parent_id = record.id 的下一条
+    """
+    chain: list[JokeRecord] = []
+    current_id: Optional[int] = root_id
+
+    while current_id:
+        record = get_joke_by_id(current_id, db_path=db_path)
+        if record is None:
+            break
+        chain.append(record)
+
+        with _connect(db_path) as conn:
+            next_row = conn.execute(
+                "SELECT id FROM jokes WHERE parent_id = ? ORDER BY rewrite_round ASC, id ASC LIMIT 1",
+                (record.id,),
+            ).fetchone()
+        current_id = next_row["id"] if next_row else None
+
+    return chain
