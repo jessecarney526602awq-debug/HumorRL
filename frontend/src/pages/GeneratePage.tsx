@@ -7,6 +7,7 @@ import {
   listPersonas,
   rewriteJoke,
 } from '../api/endpoints'
+import { getApiErrorMessage } from '../api/client'
 import ScoreBars from '../components/ScoreBars'
 
 const contentTypes: Array<{ value: ContentType; label: string }> = [
@@ -30,11 +31,15 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    listPersonas().then((items) => {
-      setPersonas(items)
-      const first = items.find((item) => !item.is_preset) ?? items[0]
-      setPersonaId(first?.id ?? null)
-    })
+    listPersonas()
+      .then((items) => {
+        setPersonas(items)
+        const first = items.find((item) => !item.is_preset) ?? items[0]
+        setPersonaId(first?.id ?? null)
+      })
+      .catch((err) => {
+        setError(getApiErrorMessage(err))
+      })
   }, [])
 
   async function handleGenerate() {
@@ -45,12 +50,12 @@ export default function GeneratePage() {
       const joke = await generateJoke({
         content_type: contentType,
         topic: topic || undefined,
-        n: 3,
+        n: 1,
         persona_id: personaEnabled ? personaId : null,
       })
       setGenerated(joke)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '生成失败')
+      setError(getApiErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -63,7 +68,7 @@ export default function GeneratePage() {
     try {
       setRewrites(await rewriteJoke(generated.id))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '改写失败')
+      setError(getApiErrorMessage(err))
     } finally {
       setRewriting(false)
     }

@@ -360,11 +360,15 @@ def get_stats(db_path: str = DB_PATH) -> dict:
         ).fetchall()
     return {
         "by_type": [
-            {"type": r["content_type"], "count": r["cnt"], "avg_score": r["avg_score"]}
+            {
+                "type": r["content_type"],
+                "count": r["cnt"],
+                "avg_score": float(r["avg_score"] or 0.0),
+            }
             for r in rows
         ],
         "recent_scores": [
-            {"score": r["score_total"], "created_at": r["created_at"]}
+            {"score": float(r["score_total"] or 0.0), "created_at": r["created_at"]}
             for r in recent
         ],
     }

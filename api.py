@@ -140,6 +140,10 @@ def _find_persona(persona_id: int) -> Persona:
     raise HTTPException(status_code=404, detail=f"Persona {persona_id} not found")
 
 
+def _service_error(detail: str, status_code: int = 503) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=detail)
+
+
 @app.get("/api/personas", response_model=list[PersonaModel])
 def get_personas_api() -> list[PersonaModel]:
     return [_persona_model(persona) for persona in db.get_personas()]
@@ -177,23 +181,39 @@ def delete_persona_api(persona_id: int) -> SimpleStatusResponse:
 
 @app.post("/api/personas/ai-generate", response_model=GeneratedPersonaResponse)
 def ai_generate_persona_api(payload: PersonaAIGenerateRequest) -> GeneratedPersonaResponse:
-    return GeneratedPersonaResponse(**strategist.generate_persona_style(payload.name_input, payload.background))
+    try:
+        return GeneratedPersonaResponse(**strategist.generate_persona_style(payload.name_input, payload.background))
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise _service_error(f"AI Persona 服务未就绪：{exc}") from exc
+    except Exception as exc:
+        raise _service_error(f"AI Persona 生成失败：{exc}", status_code=500) from exc
 
 
 @app.post("/api/generate", response_model=JokeModel)
 def generate_api(payload: GenerateRequestModel) -> JokeModel:
-    content_type = _parse_content_type(payload.content_type)
-    persona = _find_persona(payload.persona_id) if payload.persona_id is not None else None
-    joke = humor_engine.generate_and_pick_best(
-        GenerationRequest(
-            content_type=content_type,
-            persona=persona,
-            topic=payload.topic,
-            n=payload.n,
+    try:
+        content_type = _parse_content_type(payload.content_type)
+        persona = _find_persona(payload.persona_id) if payload.persona_id is not None else None
+        joke = humor_engine.generate_and_pick_best(
+            GenerationRequest(
+                content_type=content_type,
+                persona=persona,
+                topic=payload.topic,
+                n=payload.n,
+            )
         )
-    )
-    joke.id = db.save_joke(joke)
-    return _joke_model(joke)
+        joke.id = db.save_joke(joke)
+        return _joke_model(joke)
+    except HTTPException:
+        raise
+    except FileNotFoundError as exc:
+        raise _service_error(f"生成模板缺失：{exc}", status_code=500) from exc
+    except RuntimeError as exc:
+        raise _service_error(f"生成服务未就绪：{exc}") from exc
+    except Exception as exc:
+        raise _service_error(f"生成失败：{exc}", status_code=500) from exc
 
 
 @app.get("/api/jokes", response_model=list[JokeModel])
@@ -222,8 +242,15 @@ def rewrite_joke_api(joke_id: int, payload: RewriteRequest) -> list[JokeModel]:
     joke = db.get_joke_by_id(joke_id)
     if joke is None:
         raise HTTPException(status_code=404, detail=f"Joke {joke_id} not found")
-    rewritten = rewrite_until_good(joke, max_rounds=payload.max_rounds, target_score=payload.target_score)
-    return [_joke_model(item) for item in rewritten]
+    try:
+        rewritten = rewrite_until_good(joke, max_rounds=payload.max_rounds, target_score=payload.target_score)
+        return [_joke_model(item) for item in rewritten]
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise _service_error(f"改写服务未就绪：{exc}") from exc
+    except Exception as exc:
+        raise _service_error(f"改写失败：{exc}", status_code=500) from exc
 
 
 @app.get("/api/stats", response_model=StatsResponse)
