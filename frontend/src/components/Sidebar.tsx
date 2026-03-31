@@ -55,10 +55,13 @@ function TrainingButton() {
       <button
         onClick={handleClick}
         disabled={loading}
-        className="w-full rounded-lg border border-black py-3 text-xs font-bold tracking-[0.15em] text-black transition-opacity hover:opacity-70 flex items-center justify-center gap-2"
+        className="flex w-full items-center justify-between rounded-lg border border-black bg-white px-4 py-3 text-xs font-bold tracking-[0.15em] text-black transition-all hover:bg-surface-container-low disabled:opacity-50"
       >
-        <span className="inline-block h-2 w-2 rounded-full bg-black animate-pulse" />
-        {loading ? '处理中...' : '训练中  终止'}
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-black animate-pulse" />
+          <span>{loading ? '处理中...' : '训练中'}</span>
+        </span>
+        <span className="text-[10px] text-outline">终止</span>
       </button>
     )
   }
@@ -67,9 +70,10 @@ function TrainingButton() {
     <button
       onClick={handleClick}
       disabled={loading}
-      className="w-full rounded-lg bg-black py-3 text-xs font-bold tracking-[0.15em] text-white transition-opacity hover:opacity-90"
+      className="flex w-full items-center justify-center gap-2 rounded-lg bg-black px-4 py-3 text-xs font-bold tracking-[0.15em] text-white transition-all hover:-translate-y-0.5 hover:opacity-95 disabled:opacity-50"
     >
-      {loading ? '启动中...' : '开始训练 →'}
+      <span>{loading ? '启动中...' : '开始训练'}</span>
+      <span className="material-symbols-outlined text-base">arrow_forward</span>
     </button>
   )
 }

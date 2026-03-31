@@ -7,6 +7,7 @@ import {
   getDiversity,
   getKnowledge,
   getRewardHacking,
+  getSchedulerStatus,
   getUcb1,
   listReports,
   listVariants,
@@ -18,6 +19,7 @@ import {
   type KnowledgeEntry,
   type PromptVariant,
   type RewardHackingResponse,
+  type SchedulerStatus,
   type UCB1Item,
 } from '../api/endpoints'
 import { CONTENT_TYPE_OPTIONS, contentTypeLabelMap } from './shared'
@@ -38,8 +40,10 @@ export default function MonitorPage() {
   const [reports, setReports] = useState<DailyReport[]>([])
   const [costs, setCosts] = useState<CostStatsResponse | null>(null)
   const [variants, setVariants] = useState<PromptVariant[]>([])
+  const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null)
   const [variantType, setVariantType] = useState<ContentType>(defaultType)
   const [loading, setLoading] = useState(true)
+  const [schedulerLoading, setSchedulerLoading] = useState(true)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -71,10 +75,29 @@ export default function MonitorPage() {
     }
   }
 
+  async function loadScheduler() {
+    try {
+      const data = await getSchedulerStatus()
+      setScheduler(data)
+    } catch {
+      setScheduler(null)
+    } finally {
+      setSchedulerLoading(false)
+    }
+  }
+
   useEffect(() => {
     void loadDashboard(variantType)
     // load on first paint and whenever the selected content type changes
   }, [variantType])
+
+  useEffect(() => {
+    void loadScheduler()
+    const timer = window.setInterval(() => {
+      void loadScheduler()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   async function runAction(action: 'review' | 'self-learn' | 'report' | 'evolve') {
     setBusyAction(action)
@@ -112,6 +135,35 @@ export default function MonitorPage() {
     return Math.min(100, Math.round((total / 200000) * 100))
   }, [costs])
   const alertStyle = alertStyles[rewardHacking?.level ?? 0] ?? alertStyles[0]
+  const trainingState = useMemo(() => {
+    if (!scheduler?.is_alive) {
+      return {
+        dotClass: 'bg-error',
+        badgeClass: 'border-error/20 bg-error/10 text-error',
+        label: '调度器离线',
+        detail: '训练循环当前不可用，需检查服务或心跳。',
+      }
+    }
+    if (scheduler.is_training) {
+      return {
+        dotClass: 'bg-emerald-500',
+        badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        label: '正在训练',
+        detail: '生成器正在跑新一轮样本与评分。',
+      }
+    }
+    return {
+      dotClass: 'bg-sky-500',
+      badgeClass: 'border-sky-200 bg-sky-50 text-sky-700',
+      label: '调度器运行中，等待下一轮',
+      detail: '心跳正常，正在等待达到下一次触发阈值。',
+    }
+  }, [scheduler])
+
+  function formatDate(value: string | null) {
+    if (!value) return '未运行'
+    return new Date(value).toLocaleString('zh-CN')
+  }
 
   return (
     <div className="space-y-6">
@@ -136,6 +188,77 @@ export default function MonitorPage() {
 
       {error ? <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-error">{error}</div> : null}
       {actionMessage ? <div className="rounded-lg bg-surface-container-high px-4 py-3 text-sm text-black">{actionMessage}</div> : null}
+
+      <section className="panel p-8">
+        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="eyebrow">Training Engine</div>
+            <h2 className="mt-3 font-headline text-2xl font-extrabold tracking-tight">训练控制台</h2>
+          </div>
+          <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-bold ${trainingState.badgeClass}`}>
+            <span className={`h-2 w-2 rounded-full ${trainingState.dotClass} ${scheduler?.is_training ? 'animate-pulse' : ''}`} />
+            <span>{schedulerLoading ? '状态加载中...' : trainingState.label}</span>
+          </div>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+          <div className="space-y-6">
+            <div className="rounded-xl bg-surface-container-low p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="eyebrow">训练进度</span>
+                <span className="text-sm font-bold text-black">
+                  {scheduler?.training_progress.jokes_since_last_review ?? 0}/{scheduler?.training_progress.trigger_interval ?? 0}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-white">
+                <div
+                  className="h-full bg-black transition-all"
+                  style={{ width: `${Math.max(Math.min(scheduler?.training_progress.progress_pct ?? 0, 100), 0)}%` }}
+                />
+              </div>
+              <p className="mt-3 text-sm text-outline">{trainingState.detail}</p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-black/5 bg-white p-5">
+                <div className="eyebrow">知识条目</div>
+                <div className="mt-2 text-3xl font-headline font-extrabold">{scheduler?.knowledge_stats.total ?? 0}</div>
+              </div>
+              <div className="rounded-xl border border-black/5 bg-white p-5">
+                <div className="eyebrow">基因池</div>
+                <div className="mt-2 text-3xl font-headline font-extrabold">{scheduler?.knowledge_stats.genes ?? 0}</div>
+              </div>
+              <div className="rounded-xl border border-black/5 bg-white p-5">
+                <div className="eyebrow">规则数</div>
+                <div className="mt-2 text-3xl font-headline font-extrabold">{scheduler?.knowledge_stats.rules ?? 0}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {(scheduler?.jobs ?? []).map((job) => (
+              <div key={job.job_name} className="rounded-xl border border-black/5 bg-white p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="font-headline text-base font-extrabold tracking-tight">{job.job_name}</div>
+                    <div className="mt-1 text-xs text-outline">{formatDate(job.last_run_at)}</div>
+                  </div>
+                  <span className="rounded-full bg-surface-container-low px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-outline">
+                    {job.last_status}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center justify-between text-sm text-outline">
+                  <span>累计运行</span>
+                  <span className="font-semibold text-black">{job.run_count}</span>
+                </div>
+              </div>
+            ))}
+            {!schedulerLoading && (scheduler?.jobs ?? []).length === 0 ? (
+              <div className="rounded-xl border border-dashed border-black/10 p-5 text-sm text-outline">当前没有调度任务数据。</div>
+            ) : null}
+          </div>
+        </div>
+      </section>
 
       <section className="grid gap-6 md:grid-cols-2">
         <div className="panel p-8">
