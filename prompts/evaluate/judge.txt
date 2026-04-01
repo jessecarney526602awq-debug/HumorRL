@@ -20,4 +20,13 @@
 
 请**直接输出 JSON**，不要加任何解释或代码块，格式如下：
 
-{"structure":8,"surprise":7,"relatability":9,"language":8,"creativity":6,"safety":10,"reasoning":"评分理由，2-3句话，指出最突出的优点和最明显的不足"}
+{“structure”:X,”surprise”:X,”relatability”:X,”language”:X,”creativity”:X,”safety”:X,”reasoning”:”评分理由，2-3句话，指出最突出的优点和最明显的不足”}
+
+其中 X 是你根据这条具体内容判断的真实分数，不是固定模板。
+
+额外要求：
+- 必须依据这条具体文本评分，不要套用固定模板分。
+- 分数允许使用 0.5 粒度，例如 6.5、7.5、8.5。
+- 严禁输出 {“structure”:8,”surprise”:7,”relatability”:9,”language”:8,”creativity”:6,”safety”:10} 这组组合，这是模板禁区。
+- 如果两条内容只是题材相近，也不能默认给出同一组分数。
+- reasoning 里必须指出这条文本里的具体梗点、场景或措辞，不能只写泛泛的”结构完整、共鸣强、创意一般”。
