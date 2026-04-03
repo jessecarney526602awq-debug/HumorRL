@@ -12,6 +12,16 @@ class ScoreModel(BaseModel):
     creativity: float
     safety: float
     reasoning: str
+    critique: str = ""
+    judge_shape: str = ""
+    judge_subtype: str = ""
+    route_reason: str = ""
+    display_score: Optional[float] = None
+    display_band: str = ""
+    benchmark_reason: str = ""
+    structure_summary: str = ""
+    best_moment: str = ""
+    weakest_moment: str = ""
     weighted_total: float
 
 
@@ -58,6 +68,12 @@ class JokeModel(BaseModel):
     created_at: datetime
     parent_id: Optional[int]
     rewrite_round: int
+    rank_score: Optional[float] = None
+    rank_position: Optional[int] = None
+    rank_group_size: Optional[int] = None
+    is_funny: Optional[bool] = None
+    rank_justification: str = ""
+    effective_reward: float = 0.0
 
 
 class GenerateRequestModel(BaseModel):
@@ -180,6 +196,10 @@ class ReviewResponseModel(BaseModel):
     humor_rules: list[str] = Field(default_factory=list)
     new_genes: list[str] = Field(default_factory=list)
     insight: Optional[str] = None
+    next_directive: Optional[str] = None
+    judge_directive: Optional[str] = None
+    writer_lessons: list[str] = Field(default_factory=list)
+    judge_lessons: list[str] = Field(default_factory=list)
     best_joke_id: Optional[int] = None
     confidence: Optional[float] = None
 
@@ -191,6 +211,7 @@ class SelfLearnResponseModel(BaseModel):
     contradictions: list[str] = Field(default_factory=list)
     top_features: list[str] = Field(default_factory=list)
     evolution_direction: Optional[str] = None
+    judge_focus: Optional[str] = None
 
 
 class DailyReportModel(BaseModel):

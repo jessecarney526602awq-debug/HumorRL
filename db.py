@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS jokes (
     score_safety        REAL,
     score_total         REAL,
     score_reasoning     TEXT,
+    score_critique      TEXT DEFAULT '',
+    judge_shape         TEXT DEFAULT '',
+    judge_subtype       TEXT DEFAULT '',
+    judge_route_reason  TEXT DEFAULT '',
+    display_score       REAL,
+    display_band        TEXT DEFAULT '',
+    benchmark_reason    TEXT DEFAULT '',
+    rank_score          REAL,
+    rank_position       INTEGER,
+    rank_group_size     INTEGER,
+    is_funny            INTEGER,
+    rank_justification  TEXT DEFAULT '',
     -- 人工评分
     human_rating    INTEGER,
     human_reaction  TEXT,
@@ -50,6 +62,22 @@ CREATE TABLE IF NOT EXISTS jokes (
 
 CREATE INDEX IF NOT EXISTS idx_jokes_type  ON jokes(content_type);
 CREATE INDEX IF NOT EXISTS idx_jokes_score ON jokes(score_total);
+CREATE INDEX IF NOT EXISTS idx_jokes_rank_score ON jokes(rank_score);
+
+CREATE TABLE IF NOT EXISTS rank_comparisons (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_type    TEXT    NOT NULL,
+    joke_ids        TEXT    NOT NULL DEFAULT '',
+    ranking_order   TEXT    NOT NULL DEFAULT '',
+    funny_flags     TEXT    NOT NULL DEFAULT '',
+    anchor_ids      TEXT    NOT NULL DEFAULT '',
+    anchor_accuracy REAL    NOT NULL DEFAULT 0.0,
+    model           TEXT    NOT NULL DEFAULT '',
+    raw_response    TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rank_cmp_created ON rank_comparisons(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rank_cmp_type    ON rank_comparisons(content_type);
 
 CREATE TABLE IF NOT EXISTS api_costs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +203,54 @@ def init_db(db_path: str = DB_PATH) -> None:
             conn.execute(
                 "ALTER TABLE jokes ADD COLUMN prompt_variant_id INTEGER REFERENCES prompt_variants(id)"
             )
+        if "score_critique" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN score_critique TEXT DEFAULT ''"
+            )
+        if "judge_shape" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN judge_shape TEXT DEFAULT ''"
+            )
+        if "judge_subtype" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN judge_subtype TEXT DEFAULT ''"
+            )
+        if "judge_route_reason" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN judge_route_reason TEXT DEFAULT ''"
+            )
+        if "display_score" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN display_score REAL"
+            )
+        if "display_band" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN display_band TEXT DEFAULT ''"
+            )
+        if "benchmark_reason" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN benchmark_reason TEXT DEFAULT ''"
+            )
+        if "rank_score" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN rank_score REAL"
+            )
+        if "rank_position" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN rank_position INTEGER"
+            )
+        if "rank_group_size" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN rank_group_size INTEGER"
+            )
+        if "is_funny" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN is_funny INTEGER"
+            )
+        if "rank_justification" not in cols:
+            conn.execute(
+                "ALTER TABLE jokes ADD COLUMN rank_justification TEXT DEFAULT ''"
+            )
         row = conn.execute("SELECT COUNT(*) FROM personas").fetchone()
         if row[0] == 0:
             for p in PRESET_PERSONAS:
@@ -246,16 +322,20 @@ def delete_persona(persona_id: int, db_path: str = DB_PATH) -> None:
 
 def save_joke(joke: JokeRecord, db_path: str = DB_PATH) -> int:
     s = joke.score
+    placeholders = ",".join(["?"] * 28)
     with _connect(db_path) as conn:
         cur = conn.execute(
-            """INSERT INTO jokes
+            f"""INSERT INTO jokes
                (content_type, text, persona_id,
                 score_structure, score_surprise, score_relatability,
                 score_language, score_creativity, score_safety,
-                score_total, score_reasoning,
+                score_total, score_reasoning, score_critique,
+                judge_shape, judge_subtype, judge_route_reason,
+                display_score, display_band, benchmark_reason,
+                rank_score, rank_position, rank_group_size, is_funny, rank_justification,
                 human_rating, human_reaction,
                 parent_id, rewrite_round, created_at)
-               VALUES (?,?,?, ?,?,?, ?,?,?, ?,?, ?,?, ?,?,?)""",
+               VALUES ({placeholders})""",
             (
                 joke.content_type.value,
                 joke.text,
@@ -268,6 +348,18 @@ def save_joke(joke: JokeRecord, db_path: str = DB_PATH) -> int:
                 s.safety       if s else None,
                 s.weighted_total if s else None,
                 s.reasoning    if s else None,
+                s.critique     if s else "",
+                s.judge_shape  if s else "",
+                s.judge_subtype if s else "",
+                s.route_reason if s else "",
+                s.display_score if s else None,
+                s.display_band if s else "",
+                s.benchmark_reason if s else "",
+                joke.rank_score,
+                joke.rank_position,
+                joke.rank_group_size,
+                int(joke.is_funny) if joke.is_funny is not None else None,
+                joke.rank_justification,
                 joke.human_rating,
                 joke.human_reaction,
                 joke.parent_id,
@@ -290,7 +382,7 @@ def get_jokes(
         conditions.append("content_type = ?")
         params.append(content_type.value)
     if min_score is not None:
-        conditions.append("score_total >= ?")
+        conditions.append("COALESCE(rank_score, score_total) >= ?")
         params.append(min_score)
     if unrated_only:
         conditions.append("human_rating IS NULL")
@@ -300,7 +392,7 @@ def get_jokes(
 
     with _connect(db_path) as conn:
         rows = conn.execute(
-            f"SELECT * FROM jokes {where} ORDER BY score_total DESC NULLS LAST LIMIT ?",
+            f"SELECT * FROM jokes {where} ORDER BY COALESCE(rank_score, score_total) DESC NULLS LAST LIMIT ?",
             params,
         ).fetchall()
 
@@ -316,6 +408,13 @@ def get_jokes(
                 creativity=r["score_creativity"],
                 safety=r["score_safety"],
                 reasoning=r["score_reasoning"] or "",
+            critique=r["score_critique"] or "",
+            judge_shape=r["judge_shape"] or "",
+            judge_subtype=r["judge_subtype"] or "",
+                route_reason=r["judge_route_reason"] or "",
+                display_score=float(r["display_score"]) if r["display_score"] is not None else None,
+                display_band=r["display_band"] or "",
+                benchmark_reason=r["benchmark_reason"] or "",
             )
         result.append(JokeRecord(
             id=r["id"],
@@ -328,6 +427,11 @@ def get_jokes(
             created_at=datetime.datetime.fromisoformat(r["created_at"]),
             parent_id=r["parent_id"],
             rewrite_round=r["rewrite_round"],
+            rank_score=float(r["rank_score"]) if r["rank_score"] is not None else None,
+            rank_position=int(r["rank_position"]) if r["rank_position"] is not None else None,
+            rank_group_size=int(r["rank_group_size"]) if r["rank_group_size"] is not None else None,
+            is_funny=bool(r["is_funny"]) if r["is_funny"] is not None else None,
+            rank_justification=r["rank_justification"] or "",
         ))
     return result
 
@@ -351,12 +455,12 @@ def get_stats(db_path: str = DB_PATH) -> dict:
     """返回简单统计，供 app.py 的统计页使用。"""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT content_type, COUNT(*) as cnt, AVG(score_total) as avg_score "
+            "SELECT content_type, COUNT(*) as cnt, AVG(COALESCE(rank_score, score_total)) as avg_score "
             "FROM jokes GROUP BY content_type"
         ).fetchall()
         recent = conn.execute(
-            "SELECT score_total, created_at FROM jokes "
-            "WHERE score_total IS NOT NULL ORDER BY created_at DESC LIMIT 100"
+            "SELECT COALESCE(rank_score, score_total) as reward, created_at FROM jokes "
+            "WHERE COALESCE(rank_score, score_total) IS NOT NULL ORDER BY created_at DESC LIMIT 100"
         ).fetchall()
     return {
         "by_type": [
@@ -368,7 +472,7 @@ def get_stats(db_path: str = DB_PATH) -> dict:
             for r in rows
         ],
         "recent_scores": [
-            {"score": float(r["score_total"] or 0.0), "created_at": r["created_at"]}
+            {"score": float(r["reward"] or 0.0), "created_at": r["created_at"]}
             for r in recent
         ],
     }
@@ -385,6 +489,13 @@ def _row_to_joke_record(row: sqlite3.Row) -> JokeRecord:
             creativity=row["score_creativity"],
             safety=row["score_safety"],
             reasoning=row["score_reasoning"] or "",
+            critique=row["score_critique"] or "",
+            judge_shape=row["judge_shape"] or "",
+            judge_subtype=row["judge_subtype"] or "",
+            route_reason=row["judge_route_reason"] or "",
+            display_score=float(row["display_score"]) if row["display_score"] is not None else None,
+            display_band=row["display_band"] or "",
+            benchmark_reason=row["benchmark_reason"] or "",
         )
 
     return JokeRecord(
@@ -398,6 +509,11 @@ def _row_to_joke_record(row: sqlite3.Row) -> JokeRecord:
         created_at=datetime.datetime.fromisoformat(row["created_at"]),
         parent_id=row["parent_id"],
         rewrite_round=row["rewrite_round"],
+        rank_score=float(row["rank_score"]) if row["rank_score"] is not None else None,
+        rank_position=int(row["rank_position"]) if row["rank_position"] is not None else None,
+        rank_group_size=int(row["rank_group_size"]) if row["rank_group_size"] is not None else None,
+        is_funny=bool(row["is_funny"]) if row["is_funny"] is not None else None,
+        rank_justification=row["rank_justification"] or "",
     )
 
 
@@ -503,6 +619,83 @@ def get_cost_stats(days: int = 7, db_path: str = DB_PATH) -> dict:
             for r in by_model
         ],
         "daily": [{"date": r["date"], "total_tokens": int(r["total_tokens"] or 0)} for r in daily],
+    }
+
+
+def save_rank_comparison(
+    content_type: str,
+    joke_ids: list[int],
+    ranking_order: list[int],
+    funny_flags: list[bool],
+    anchor_ids: list[int],
+    anchor_accuracy: float,
+    model: str,
+    raw_response: str,
+    db_path: str = DB_PATH,
+) -> int:
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO rank_comparisons "
+            "(content_type, joke_ids, ranking_order, funny_flags, anchor_ids, anchor_accuracy, model, raw_response, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                content_type,
+                json.dumps(joke_ids, ensure_ascii=False),
+                json.dumps(ranking_order, ensure_ascii=False),
+                json.dumps([bool(flag) for flag in funny_flags], ensure_ascii=False),
+                json.dumps(anchor_ids, ensure_ascii=False),
+                float(anchor_accuracy),
+                model,
+                raw_response,
+                _now(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_rank_stats(recent_n: int = 50, db_path: str = DB_PATH) -> dict:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT anchor_accuracy, funny_flags, content_type, created_at "
+            "FROM rank_comparisons ORDER BY created_at DESC LIMIT ?",
+            (recent_n,),
+        ).fetchall()
+
+    if not rows:
+        return {
+            "count": 0,
+            "avg_anchor_accuracy": 0.0,
+            "not_funny_ratio": 0.0,
+            "by_type": {},
+        }
+
+    all_flags: list[bool] = []
+    by_type: dict[str, dict[str, float | int]] = {}
+    for row in rows:
+        flags = json.loads(row["funny_flags"] or "[]")
+        bool_flags = [bool(flag) for flag in flags]
+        all_flags.extend(bool_flags)
+        content_type = row["content_type"]
+        bucket = by_type.setdefault(content_type, {"count": 0, "not_funny_ratio": 0.0})
+        bucket["count"] += 1
+        if bool_flags:
+            not_funny_ratio = sum(1 for flag in bool_flags if not flag) / len(bool_flags)
+            bucket["not_funny_ratio"] += not_funny_ratio
+
+    for content_type, bucket in by_type.items():
+        if bucket["count"]:
+            bucket["not_funny_ratio"] = round(bucket["not_funny_ratio"] / bucket["count"], 4)
+
+    avg_anchor_accuracy = sum(float(row["anchor_accuracy"] or 0.0) for row in rows) / len(rows)
+    not_funny_ratio = (
+        sum(1 for flag in all_flags if not flag) / len(all_flags)
+        if all_flags else 0.0
+    )
+    return {
+        "count": len(rows),
+        "avg_anchor_accuracy": round(avg_anchor_accuracy, 4),
+        "not_funny_ratio": round(not_funny_ratio, 4),
+        "by_type": by_type,
     }
 
 
@@ -709,7 +902,7 @@ def count_jokes_since(since_id: int, db_path: str = DB_PATH) -> int:
     """统计 id > since_id 的笑话数量，用于触发战略师。"""
     with _connect(db_path) as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM jokes WHERE id > ? AND score_total IS NOT NULL",
+            "SELECT COUNT(*) FROM jokes WHERE id > ? AND COALESCE(rank_score, score_total) IS NOT NULL",
             (since_id,),
         ).fetchone()[0]
 
@@ -807,9 +1000,96 @@ def get_current_directive(db_path: str = DB_PATH) -> str:
     指令以 entry_type='generation_directive' 存储在 knowledge_base 里。
     没有时返回空字符串（生成端按默认行为执行）。
     """
+    return get_latest_knowledge_content("generation_directive", db_path=db_path)
+
+
+def get_current_judge_directive(db_path: str = DB_PATH) -> str:
+    """返回战略师最新下发的评分原则。"""
+    return get_latest_knowledge_content("judge_directive", db_path=db_path)
+
+
+def get_latest_knowledge_content(entry_type: str, db_path: str = DB_PATH) -> str:
+    """返回某类知识的最新一条 content。没有时返回空字符串。"""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT content FROM knowledge_base WHERE entry_type='generation_directive' "
+            "SELECT content FROM knowledge_base WHERE entry_type=? "
             "ORDER BY created_at DESC LIMIT 1"
+            , (entry_type,)
         ).fetchone()
     return row["content"] if row else ""
+
+
+def load_calibration_set(path: str = None) -> list[dict]:
+    """
+    从 data/calibration_set.json 加载校准数据。
+    返回 list[dict]，每个 dict 含 id, text, content_type, label, expected_score, why, tags。
+    """
+    if path is None:
+        path = str(Path(__file__).resolve().parent / "data" / "calibration_set.json")
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return data["calibration_jokes"]
+
+
+def save_calibration_run(
+    run_date: str,
+    overall_correlation: float,
+    dimension_biases: dict,
+    classification_accuracy: dict,
+    report_md: str,
+    db_path: str = DB_PATH,
+) -> int:
+    """保存一次校准运行结果到 knowledge_base。"""
+    content = json.dumps(
+        {
+            "run_date": run_date,
+            "overall_correlation": overall_correlation,
+            "dimension_biases": dimension_biases,
+            "classification_accuracy": classification_accuracy,
+            "report_md": report_md,
+        },
+        ensure_ascii=False,
+    )
+    return save_knowledge(
+        entry_type="judge_calibration",
+        content=content,
+        relevance_score=1.5,
+        db_path=db_path,
+    )
+
+
+def get_latest_calibration(db_path: str = DB_PATH) -> dict | None:
+    """返回最近一次校准结果（parsed dict），无则返回 None。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT content FROM knowledge_base WHERE entry_type='judge_calibration' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["content"])
+
+
+def get_top_jokes(
+    content_type: str = None,
+    limit: int = 3,
+    min_score: float = 7.5,
+    db_path: str = DB_PATH,
+) -> list[JokeRecord]:
+    """返回高分 JokeRecord 列表，用于注入 Generator prompt。"""
+    with _connect(db_path) as conn:
+        if content_type:
+            rows = conn.execute(
+                "SELECT * FROM jokes WHERE COALESCE(rank_score, score_total) >= ? "
+                "AND COALESCE(rank_score, score_total) IS NOT NULL "
+                "AND content_type = ? ORDER BY COALESCE(rank_score, score_total) DESC LIMIT ?",
+                (min_score, content_type, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM jokes WHERE COALESCE(rank_score, score_total) >= ? "
+                "AND COALESCE(rank_score, score_total) IS NOT NULL "
+                "ORDER BY COALESCE(rank_score, score_total) DESC LIMIT ?",
+                (min_score, limit),
+            ).fetchall()
+    return [_row_to_joke_record(row) for row in rows]

@@ -1,0 +1,36 @@
+你是 HumorRL 的 Judge 校准分析器。你要根据真实标注笑话与 Judge 实际评分结果，提炼评分偏差，并输出可执行的长期修正规则。
+
+## 幽默底层理论参考
+{theory_foundation}
+
+## 实战幽默案例参考
+{humor_reference}
+
+---
+
+## 本次校准概况
+- 样本量：{sample_size}
+- Pearson：{overall_pearson}
+- Spearman：{overall_spearman}
+- 平均分差（Judge - 预期）：{avg_gap}
+- 好笑识别率：{funny_accuracy}
+- 不好笑识别率：{not_funny_accuracy}
+
+## 错判样本
+
+### 不好笑但被打高分
+{high_false_positives}
+
+### 好笑但被打低分
+{low_false_negatives}
+
+---
+
+请输出严格 JSON，不要有其他文字：
+{{
+  "summary": "一句话总结 Judge 目前最关键的问题",
+  "lessons": ["本轮校准总结出的核心教训，每条20-40字，1-5条"],
+  "judge_lessons": ["评分端必须长期记住的教训，每条20-40字，1-5条"],
+  "writer_lessons": ["生成端也应该吸收的反面/正面经验，每条20-40字，0-3条"],
+  "judge_directive": "直接给评分端的修正规则，80-160字，强调哪些内容应加分、哪些内容不能虚高"
+}}

@@ -83,13 +83,27 @@ class ScoreResult:
     creativity: float      # 创意度（新颖，不套路）
     safety: float          # 安全性（无冒犯歧视）
     reasoning: str         # LLM 的评分理由（自然语言）
+    critique: str = ""     # Judge 的苛刻批评（先批评再打分的 CoT 内容）
+    judge_shape: str = ""  # Judge 路由：short / long
+    judge_subtype: str = ""  # Judge 子类型：language / observation / absurd / general
+    route_reason: str = ""  # 为什么走到这个 Judge 分支
+    display_score: Optional[float] = None  # 给人看的展示分（Phase 1 先用 pointwise fallback）
+    display_band: str = ""  # 给人看的分段标签
+    benchmark_reason: str = ""  # 展示分解释，后续可升级为锚点区间说明
+    structure_summary: str = ""  # 长内容结构摘要
+    best_moment: str = ""  # 长内容最成立的一处
+    weakest_moment: str = ""  # 长内容最拖后腿的一处
 
     @property
     def weighted_total(self) -> float:
-        """加权总分，安全分低于 3 直接返回 0（一票否决）"""
+        """
+        加权总分。两道一票否决：
+        1. safety < 3 → 直接返回 0（安全问题）
+        2. surprise < 5 → 总分封顶 4.0（没有包袱不算笑话）
+        """
         if self.safety < 3:
             return 0.0
-        return (
+        raw = (
             self.structure    * 0.15 +
             self.surprise     * 0.25 +
             self.relatability * 0.20 +
@@ -97,6 +111,29 @@ class ScoreResult:
             self.creativity   * 0.15 +
             self.safety       * 0.10
         )
+        if self.surprise < 5:
+            return min(raw, 4.0)
+        return raw
+
+
+@dataclass
+class RankPosition:
+    text_index: int
+    rank: int
+    is_funny: bool
+    justification: str
+    rank_score: float
+    is_anchor: bool = False
+    candidate_id: str = ""
+
+
+@dataclass
+class GroupRankResult:
+    positions: list[RankPosition]
+    anchor_positions: list[RankPosition]
+    raw_response: str
+    model: str
+    anchor_accuracy: float = 0.0
 
 
 @dataclass
@@ -115,6 +152,19 @@ class JokeRecord:
     created_at: datetime.datetime = field(default_factory=datetime.datetime.now)
     parent_id: Optional[int] = None    # 改写来源，原创为 None
     rewrite_round: int = 0             # 第几轮改写，原创为 0
+    rank_score: Optional[float] = None
+    rank_position: Optional[int] = None
+    rank_group_size: Optional[int] = None
+    is_funny: Optional[bool] = None
+    rank_justification: str = ""
+
+    @property
+    def effective_reward(self) -> float:
+        if self.rank_score is not None:
+            return float(self.rank_score)
+        if self.score is not None:
+            return float(self.score.weighted_total)
+        return 0.0
 
 
 # ─────────────────────────────────────────

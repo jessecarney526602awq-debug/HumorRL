@@ -77,7 +77,7 @@ def rewrite_until_good(
     """
     迭代改写，最多 max_rounds 轮。
     终止条件（满足其一）：
-      1. weighted_total >= target_score
+      1. display_score >= target_score（若暂无展示分则回退 weighted_total）
       2. 已达 max_rounds 轮
       3. 改写后分数比上一版本下降超过 0.5（越改越烂，提前停止）
 
@@ -96,8 +96,8 @@ def rewrite_until_good(
         rewritten.id = db.save_joke(rewritten, db_path=db_path)
         results.append(rewritten)
 
-        previous_total = current.score.weighted_total if current.score else None
-        current_total = rewritten.score.weighted_total if rewritten.score else None
+        previous_total = humor_engine.display_track_value(current.score)
+        current_total = humor_engine.display_track_value(rewritten.score)
 
         if current_total is not None and current_total >= target_score:
             break

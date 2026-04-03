@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import JokeCard from '../components/JokeCard'
 import { listJokes, rateJoke, type Joke } from '../api/endpoints'
+import { getDisplayScore, getTrainingReward } from '../api/judgeView'
 import { CONTENT_TYPE_OPTIONS, contentTypeLabelMap } from './shared'
 
 const filterOptions = [{ value: '', label: '全部' }, ...CONTENT_TYPE_OPTIONS]
@@ -52,10 +53,18 @@ export default function HistoryPage() {
     setJokes((current) => current.map((item) => (item.id === jokeId ? updated : item)))
   }
 
-  const averageScore = useMemo(() => {
-    if (jokes.length === 0) return 0
-    const total = jokes.reduce((sum, joke) => sum + (joke.score?.weighted_total ?? 0), 0)
-    return total / jokes.length
+  const averageDisplayScore = useMemo(() => {
+    const scored = jokes.filter((joke) => joke.score)
+    if (scored.length === 0) return 0
+    const total = scored.reduce((sum, joke) => sum + getDisplayScore(joke.score), 0)
+    return total / scored.length
+  }, [jokes])
+
+  const averageTrainingReward = useMemo(() => {
+    const rewards = jokes.map((joke) => getTrainingReward(joke)).filter((value): value is number => value != null)
+    if (rewards.length === 0) return null
+    const total = rewards.reduce((sum, value) => sum + value, 0)
+    return total / rewards.length
   }, [jokes])
 
   const dominantType = useMemo(() => {
@@ -95,7 +104,7 @@ export default function HistoryPage() {
 
         <div className="flex flex-col gap-6 md:flex-row md:items-center">
           <div className="space-y-2">
-            <div className="eyebrow">评分区间</div>
+            <div className="eyebrow">训练奖励阈值</div>
             <div className="flex items-center gap-3">
               <span className="text-[10px] font-bold text-outline">0</span>
               <input
@@ -109,6 +118,7 @@ export default function HistoryPage() {
               />
               <span className="min-w-8 text-right text-[10px] font-bold text-black">{minScore}</span>
             </div>
+            <p className="text-[11px] text-outline">当前筛选按训练轨 reward 过滤，不按前台展示分过滤。</p>
           </div>
 
           <button
@@ -153,14 +163,18 @@ export default function HistoryPage() {
       )}
 
       {jokes.length > 0 ? (
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="panel p-6">
             <div className="eyebrow">当前样本数</div>
             <div className="metric-value mt-3">{jokes.length}</div>
           </div>
           <div className="panel p-6">
-            <div className="eyebrow">平均 AI 分</div>
-            <div className="metric-value mt-3">{averageScore.toFixed(1)}</div>
+            <div className="eyebrow">平均展示分</div>
+            <div className="metric-value mt-3">{averageDisplayScore.toFixed(1)}</div>
+          </div>
+          <div className="panel p-6">
+            <div className="eyebrow">平均训练奖励</div>
+            <div className="metric-value mt-3">{averageTrainingReward != null ? averageTrainingReward.toFixed(1) : '--'}</div>
           </div>
           <div className="panel p-6">
             <div className="eyebrow">主导类型</div>

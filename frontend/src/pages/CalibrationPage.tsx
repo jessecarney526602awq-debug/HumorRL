@@ -32,7 +32,7 @@ function ScatterPlot({ jokes }: { jokes: Joke[] }) {
         Human Expert Score
       </div>
       <div className="absolute left-4 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] font-bold uppercase tracking-[0.2em] text-outline">
-        LLM Score
+        Diagnostic Score
       </div>
     </div>
   )
@@ -83,7 +83,7 @@ export default function CalibrationPage() {
       <header className="space-y-3 text-center">
         <h1 className="page-title">校准报告系统</h1>
         <p className="mx-auto max-w-2xl text-sm font-medium leading-relaxed text-outline">
-          对照人工评分与 LLM 评分的偏差，判断当前 Judge 是否仍然值得信任。
+          这里校准的是 Judge 的诊断分，而不是训练轨 reward；它主要回答“系统解释得准不准”。
         </p>
       </header>
 
@@ -151,7 +151,7 @@ export default function CalibrationPage() {
             <div>
               <h2 className="font-headline text-lg font-extrabold tracking-tight">得分相关性分布</h2>
               <p className="mt-1 text-[11px] text-outline">
-                {report ? `N = ${report.sample_size} samples` : '等待报告生成'}
+                {report ? `N = ${report.sample_size} samples · diagnostic track` : '等待报告生成'}
               </p>
             </div>
             {report ? (

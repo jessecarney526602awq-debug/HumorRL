@@ -8,6 +8,7 @@ import {
   rewriteJoke,
 } from '../api/endpoints'
 import { getApiErrorMessage } from '../api/client'
+import { getDisplayBand, getDisplayScore, getTrainingReward, getTrainingStateLabel } from '../api/judgeView'
 import ScoreBars from '../components/ScoreBars'
 
 const contentTypes: Array<{ value: ContentType; label: string }> = [
@@ -73,6 +74,11 @@ export default function GeneratePage() {
       setRewriting(false)
     }
   }
+
+  const generatedDisplayScore = getDisplayScore(generated?.score)
+  const generatedDisplayBand = getDisplayBand(generated?.score)
+  const generatedTrainingReward = getTrainingReward(generated)
+  const generatedTrainingState = getTrainingStateLabel(generated)
 
   return (
     <div className="flex flex-col gap-12 lg:flex-row">
@@ -167,6 +173,34 @@ export default function GeneratePage() {
 
         <ScoreBars score={generated?.score ?? null} />
 
+        {generated?.score ? (
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="panel p-5">
+              <div className="eyebrow">前台展示轨</div>
+              <div className="mt-3 text-3xl font-headline font-extrabold tracking-tight">{generatedDisplayScore.toFixed(1)}</div>
+              <p className="mt-2 text-xs text-outline">{generatedDisplayBand || '当前展示分由诊断轨回退生成。'}</p>
+            </div>
+            <div className="panel p-5">
+              <div className="eyebrow">Judge 路由</div>
+              <div className="mt-3 text-lg font-headline font-extrabold tracking-tight">
+                {generated.score.judge_shape || 'short'} / {generated.score.judge_subtype || 'general'}
+              </div>
+              <p className="mt-2 text-xs text-outline">{generated.score.route_reason || '当前未返回额外路由说明。'}</p>
+            </div>
+            <div className="panel p-5">
+              <div className="eyebrow">训练轨状态</div>
+              <div className="mt-3 text-lg font-headline font-extrabold tracking-tight">
+                {generatedTrainingReward !== null ? generatedTrainingReward.toFixed(1) : 'display-only'}
+              </div>
+              <p className="mt-2 text-xs text-outline">
+                {generatedTrainingReward !== null
+                  ? generatedTrainingState
+                  : '当前单条前台生成主要用于展示，不直接进入 group ranking 训练奖励。'}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex flex-col gap-4 md:flex-row">
           <button className="flex-1 rounded-lg border border-black py-4 text-sm font-bold transition-all hover:bg-black hover:text-white">
             已自动保存
@@ -199,7 +233,7 @@ export default function GeneratePage() {
                 <div className="mb-3 flex items-center justify-between">
                   <span className="eyebrow">Round {rewrite.rewrite_round}</span>
                   <span className="font-headline text-2xl font-black">
-                    {(rewrite.score?.weighted_total ?? 0).toFixed(1)}
+                    {getDisplayScore(rewrite.score).toFixed(1)}
                   </span>
                 </div>
                 <p className="text-sm leading-7 text-black">{rewrite.text}</p>

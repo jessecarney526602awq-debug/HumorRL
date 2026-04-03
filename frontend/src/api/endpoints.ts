@@ -15,6 +15,16 @@ export interface Score {
   creativity: number
   safety: number
   reasoning: string
+  critique: string
+  judge_shape: string
+  judge_subtype: string
+  route_reason: string
+  display_score: number | null
+  display_band: string
+  benchmark_reason: string
+  structure_summary: string
+  best_moment: string
+  weakest_moment: string
   weighted_total: number
 }
 
@@ -37,6 +47,12 @@ export interface Joke {
   created_at: string
   parent_id: number | null
   rewrite_round: number
+  rank_score: number | null
+  rank_position: number | null
+  rank_group_size: number | null
+  is_funny: boolean | null
+  rank_justification: string
+  effective_reward: number
 }
 
 export interface StatsByType {

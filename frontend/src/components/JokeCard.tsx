@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Joke } from '../api/endpoints'
+import { getDisplayBand, getDisplayScore, getTrainingReward, getTrainingStateLabel } from '../api/judgeView'
 import ScoreBars from './ScoreBars'
 
 const reactions = ['好笑', '一般', '不好笑']
@@ -23,6 +24,11 @@ export default function JokeCard({
     setRating(joke.human_rating ?? 7)
     setReaction(joke.human_reaction ?? '一般')
   }, [joke.human_rating, joke.human_reaction])
+
+  const displayScore = getDisplayScore(joke.score)
+  const displayBand = getDisplayBand(joke.score)
+  const trainingReward = getTrainingReward(joke)
+  const trainingState = getTrainingStateLabel(joke)
 
   async function submit() {
     if (!onSubmitRating) return
@@ -52,9 +58,19 @@ export default function JokeCard({
             </p>
           </div>
           <div className="text-right">
-            <div className="mb-1 text-xs font-bold uppercase tracking-widest text-gray-400">AI Score</div>
-            <div className="text-3xl font-black tracking-tighter text-black">
-              {(joke.score?.weighted_total ?? 0).toFixed(1)}
+            <div className="mb-1 text-xs font-bold uppercase tracking-widest text-gray-400">Display Score</div>
+            <div className="text-3xl font-black tracking-tighter text-black">{displayScore.toFixed(1)}</div>
+            <div className="mt-2 flex flex-wrap justify-end gap-2">
+              {displayBand ? (
+                <span className="rounded-full border border-black/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-outline">
+                  {displayBand}
+                </span>
+              ) : null}
+              {trainingReward !== null ? (
+                <span className="rounded-full bg-black px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                  Reward {trainingReward.toFixed(1)}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -69,6 +85,29 @@ export default function JokeCard({
           </div>
           <div className="flex flex-col justify-between">
             <div>
+              <div className="mb-8 rounded-xl border border-black/5 bg-surface-container-low p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">
+                    训练轨 / Training Track
+                  </span>
+                  {trainingReward !== null ? (
+                    <span className="text-lg font-black tracking-tighter text-black">{trainingReward.toFixed(1)}</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-gray-400">display only</span>
+                  )}
+                </div>
+                <p className="text-sm leading-relaxed text-outline">{trainingState}</p>
+                {trainingReward !== null && joke.rank_position != null && joke.rank_group_size != null ? (
+                  <p className="mt-3 text-xs text-gray-500">
+                    本轮排序第 {joke.rank_position} / {joke.rank_group_size}
+                    {joke.rank_justification ? `，${joke.rank_justification}` : ''}
+                  </p>
+                ) : (
+                  <p className="mt-3 text-xs text-gray-500">
+                    这条记录当前只保留前台展示分，不代表训练奖励。
+                  </p>
+                )}
+              </div>
               <h4 className="mb-6 text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">
                 人工评分 / Human Review
               </h4>

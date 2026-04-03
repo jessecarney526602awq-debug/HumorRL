@@ -38,7 +38,7 @@ from api_models import (
     StatsResponse,
     UCB1SummaryItemModel,
 )
-from calibration import compute_calibration, format_report_text
+from calibration import compute_calibration, format_report_text, run_calibration
 from contract import ContentType, GenerationRequest, Persona
 from rewriter import rewrite_until_good
 
@@ -62,6 +62,35 @@ def _parse_content_type(value: str) -> ContentType:
         raise HTTPException(status_code=400, detail=f"Unsupported content_type: {value}") from exc
 
 
+def _is_scheduler_alive(jobs: list[dict]) -> bool:
+    heartbeat = next((j for j in jobs if j["job_name"] == "heartbeat"), None)
+    if not heartbeat or not heartbeat.get("last_run_at"):
+        return False
+    try:
+        delta = datetime.now() - datetime.fromisoformat(heartbeat["last_run_at"])
+    except Exception:
+        return False
+    return delta.total_seconds() < 120
+
+
+def _should_recover_stale_training(batch_job: Optional[dict], is_alive: bool) -> bool:
+    if not batch_job or batch_job.get("last_status") != "running":
+        return False
+    if is_alive:
+        return False
+    last_run_at = batch_job.get("last_run_at")
+    if not last_run_at:
+        return True
+    try:
+        started_at = datetime.fromisoformat(last_run_at)
+    except Exception:
+        return True
+    # 手动线程或异常退出后，旧的 running 状态可能残留在库里。
+    # 超过生成窗口再加一点缓冲后，自动回收这类脏状态。
+    grace_seconds = max(int(os.getenv("GENERATE_WINDOW_MINUTES", "28")) * 60 + 120, 180)
+    return (datetime.now() - started_at).total_seconds() > grace_seconds
+
+
 def _score_model(score) -> Optional["ScoreModel"]:
     from api_models import ScoreModel
 
@@ -75,6 +104,16 @@ def _score_model(score) -> Optional["ScoreModel"]:
         creativity=score.creativity,
         safety=score.safety,
         reasoning=score.reasoning,
+        critique=score.critique,
+        judge_shape=score.judge_shape,
+        judge_subtype=score.judge_subtype,
+        route_reason=score.route_reason,
+        display_score=score.display_score,
+        display_band=score.display_band,
+        benchmark_reason=score.benchmark_reason,
+        structure_summary=score.structure_summary,
+        best_moment=score.best_moment,
+        weakest_moment=score.weakest_moment,
         weighted_total=score.weighted_total,
     )
 
@@ -101,6 +140,12 @@ def _joke_model(joke) -> JokeModel:
         created_at=joke.created_at,
         parent_id=joke.parent_id,
         rewrite_round=joke.rewrite_round,
+        rank_score=joke.rank_score,
+        rank_position=joke.rank_position,
+        rank_group_size=joke.rank_group_size,
+        is_funny=joke.is_funny,
+        rank_justification=joke.rank_justification,
+        effective_reward=joke.effective_reward,
     )
 
 
@@ -281,6 +326,35 @@ def get_calibration_api(content_type: Optional[str] = None) -> CalibrationRespon
     )
 
 
+@app.post("/api/calibration/run")
+def trigger_calibration_api():
+    try:
+        result = run_calibration()
+        return {
+            "status": "success",
+            "sample_size": result["sample_size"],
+            "spearman": result["overall_spearman"],
+            "pearson": result["overall_pearson"],
+            "classification_accuracy": result["classification_accuracy"],
+            "dimension_biases": result["dimension_biases"],
+            "lessons": result["lessons"],
+            "judge_lessons": result["judge_lessons"],
+            "writer_lessons": result["writer_lessons"],
+            "judge_directive": result["judge_directive"],
+            "report": result["report_md"],
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/calibration/latest")
+def get_latest_calibration_api():
+    result = db.get_latest_calibration()
+    if not result:
+        return {"status": "no_data", "message": "尚未运行过校准"}
+    return {"status": "ok", "data": result}
+
+
 @app.get("/api/monitor/diversity", response_model=DiversityResponse)
 def get_diversity_api() -> DiversityResponse:
     return DiversityResponse(**monitor.compute_diversity().__dict__)
@@ -352,15 +426,30 @@ def get_variants_api(content_type: str) -> list[PromptVariantModel]:
 def trigger_training():
     """手动触发一次完整训练周期（后台线程，立即返回）。"""
     import threading
-    # 如果 batch_generate 正在运行，拒绝重复触发
+
     jobs = db.get_job_statuses()
+    is_alive = _is_scheduler_alive(jobs)
+    batch_job = next((j for j in jobs if j["job_name"] == "batch_generate"), None)
+    if _should_recover_stale_training(batch_job, is_alive):
+        db.upsert_job_status("batch_generate", "error", {"error": "stale_training_state_recovered"})
+        jobs = db.get_job_statuses()
+
+    # 如果 batch_generate 仍在运行，拒绝重复触发
     running = next((j for j in jobs if j["job_name"] == "batch_generate" and j["last_status"] == "running"), None)
     if running:
         raise HTTPException(status_code=409, detail="训练周期已在运行中")
     db.set_stop_flag(False)
-    def _run():
+    try:
         from scheduler import job_training_cycle
-        job_training_cycle()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"训练服务未就绪：{exc}") from exc
+
+    def _run():
+        try:
+            job_training_cycle()
+        except Exception as exc:
+            db.upsert_job_status("batch_generate", "error", {"error": str(exc)})
+
     threading.Thread(target=_run, daemon=True).start()
     return {"started": True}
 
@@ -375,19 +464,11 @@ def stop_training():
 @app.get("/api/scheduler/status")
 def get_scheduler_status():
     jobs = db.get_job_statuses()
-    heartbeat = next((j for j in jobs if j["job_name"] == "heartbeat"), None)
-
-    is_alive = False
-    if heartbeat and heartbeat.get("last_run_at"):
-        try:
-            delta = datetime.now() - datetime.fromisoformat(heartbeat["last_run_at"])
-            is_alive = delta.total_seconds() < 120
-        except Exception:
-            pass
+    is_alive = _is_scheduler_alive(jobs)
 
     last_id = db.get_last_strategist_joke_id()
     jokes_since = db.count_jokes_since(last_id)
-    interval = int(os.getenv("STRATEGIST_TRIGGER_INTERVAL", "50"))
+    interval = int(os.getenv("STRATEGIST_TRIGGER_INTERVAL", "5"))
     progress_pct = min(int(jokes_since / interval * 100), 100) if interval > 0 else 0
 
     all_kb = db.get_knowledge(limit=1000)
@@ -395,6 +476,10 @@ def get_scheduler_status():
     rules = [e for e in all_kb if e["entry_type"] == "humor_rule"]
 
     batch_job = next((j for j in jobs if j["job_name"] == "batch_generate"), None)
+    if _should_recover_stale_training(batch_job, is_alive):
+        db.upsert_job_status("batch_generate", "error", {"error": "stale_training_state_recovered"})
+        jobs = db.get_job_statuses()
+        batch_job = next((j for j in jobs if j["job_name"] == "batch_generate"), None)
     is_training = bool(batch_job and batch_job.get("last_status") == "running")
 
     return {

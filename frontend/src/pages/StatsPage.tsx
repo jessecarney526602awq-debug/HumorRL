@@ -67,7 +67,7 @@ export default function StatsPage() {
   }, [])
 
   const totalCount = useMemo(() => (stats?.by_type ?? []).reduce((sum, item) => sum + item.count, 0), [stats])
-  const weightedAverage = useMemo(() => {
+  const averageReward = useMemo(() => {
     const items = stats?.by_type ?? []
     const denominator = items.reduce((sum, item) => sum + item.count, 0)
     if (denominator === 0) return 0
@@ -80,7 +80,7 @@ export default function StatsPage() {
     <div className="space-y-10">
       <header className="space-y-2">
         <h1 className="page-title">统计数据概要</h1>
-        <p className="text-sm font-medium text-outline">把生成量、平均分和调用成本放到同一张工作台上看。</p>
+        <p className="text-sm font-medium text-outline">这里看的是系统内部 reward 轨迹，不等同于生成页对外展示的 display score。</p>
       </header>
 
       {error ? <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-error">{error}</div> : null}
@@ -91,8 +91,8 @@ export default function StatsPage() {
           <div className="metric-value mt-4">{loading ? '...' : formatCompactNumber(totalCount)}</div>
         </div>
         <div className="panel p-8">
-          <div className="eyebrow">平均质量评分</div>
-          <div className="metric-value mt-4">{loading ? '...' : weightedAverage.toFixed(2)}</div>
+          <div className="eyebrow">平均系统奖励</div>
+          <div className="metric-value mt-4">{loading ? '...' : averageReward.toFixed(2)}</div>
         </div>
         <div className="panel p-8">
           <div className="eyebrow">近 14 天 Token</div>
@@ -135,7 +135,7 @@ export default function StatsPage() {
         <div className="space-y-5">
           <div>
             <h2 className="font-headline text-lg font-extrabold tracking-tight">平均评分分布</h2>
-            <p className="mt-1 text-xs text-outline">各类型当前的加权均分</p>
+            <p className="mt-1 text-xs text-outline">各类型当前的 reward 均值，用于训练观察，不是前台展示分。</p>
           </div>
           <div className="panel min-h-[320px] p-8">
             {loading ? (
@@ -162,8 +162,8 @@ export default function StatsPage() {
       <section className="grid gap-10 lg:grid-cols-[1.6fr_1fr]">
         <div className="space-y-5">
           <div>
-            <h2 className="font-headline text-lg font-extrabold tracking-tight">最近 100 条分数趋势</h2>
-            <p className="mt-1 text-xs text-outline">按时间顺序观察系统评分波动</p>
+            <h2 className="font-headline text-lg font-extrabold tracking-tight">最近 100 条奖励趋势</h2>
+            <p className="mt-1 text-xs text-outline">按时间顺序观察系统主奖励波动</p>
           </div>
           <LineChart values={recentScores} />
         </div>

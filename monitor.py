@@ -33,6 +33,14 @@ class RewardHackingAlert:
     action: str
 
 
+@dataclass
+class RankQualityReport:
+    avg_anchor_accuracy: float
+    not_funny_ratio: float
+    sample_count: int
+    interpretation: str
+
+
 def compute_diversity(
     recent_n: int = 100,
     db_path: str = db.DB_PATH,
@@ -120,8 +128,8 @@ def detect_reward_hacking(
     """
     with db._connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT text, score_total, created_at FROM jokes "
-            "WHERE score_total IS NOT NULL "
+            "SELECT text, COALESCE(rank_score, score_total) as reward, created_at FROM jokes "
+            "WHERE COALESCE(rank_score, score_total) IS NOT NULL "
             "ORDER BY created_at DESC LIMIT ?",
             (recent_n,),
         ).fetchall()
@@ -140,8 +148,8 @@ def detect_reward_hacking(
     first_half = ordered_rows[:midpoint]
     second_half = ordered_rows[midpoint:]
 
-    first_avg = sum(float(row["score_total"]) for row in first_half) / len(first_half)
-    second_avg = sum(float(row["score_total"]) for row in second_half) / len(second_half)
+    first_avg = sum(float(row["reward"]) for row in first_half) / len(first_half)
+    second_avg = sum(float(row["reward"]) for row in second_half) / len(second_half)
     score_trend = second_avg - first_avg
 
     prefixes = [str(row["text"])[:20] for row in ordered_rows]
@@ -172,4 +180,39 @@ def detect_reward_hacking(
         repetition_rate=repetition_rate,
         message=message,
         action=action,
+    )
+
+
+def check_rank_quality(
+    recent_n: int = 50,
+    db_path: str = db.DB_PATH,
+) -> RankQualityReport:
+    stats = db.get_rank_stats(recent_n=recent_n, db_path=db_path)
+    sample_count = int(stats["count"])
+    if sample_count == 0:
+        return RankQualityReport(
+            avg_anchor_accuracy=0.0,
+            not_funny_ratio=0.0,
+            sample_count=0,
+            interpretation="暂无 group comparison 数据",
+        )
+
+    avg_anchor_accuracy = float(stats["avg_anchor_accuracy"])
+    not_funny_ratio = float(stats["not_funny_ratio"])
+    if avg_anchor_accuracy < 0.5:
+        interpretation = "锚点准确率过低，Judge 可能漂移，建议暂停训练排查"
+    elif avg_anchor_accuracy < 0.8:
+        interpretation = "锚点准确率一般，建议继续观察并做人工抽检"
+    elif not_funny_ratio < 0.2:
+        interpretation = "Judge 仍偏宽松，不好笑内容比例偏低"
+    elif not_funny_ratio > 0.6:
+        interpretation = "Judge 偏苛刻，不好笑内容比例偏高"
+    else:
+        interpretation = "rank 质量正常，锚点准确率和区分度处于健康范围"
+
+    return RankQualityReport(
+        avg_anchor_accuracy=avg_anchor_accuracy,
+        not_funny_ratio=not_funny_ratio,
+        sample_count=sample_count,
+        interpretation=interpretation,
     )

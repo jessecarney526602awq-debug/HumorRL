@@ -13,7 +13,7 @@ from contract import CONTENT_TYPE_LABELS, ContentType
 def _type_stats_map(db_path: str = db.DB_PATH) -> dict[str, dict[str, float]]:
     with db._connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT content_type, COUNT(*) as plays, AVG(COALESCE(score_total, 5.0)) as avg_score "
+            "SELECT content_type, COUNT(*) as plays, AVG(COALESCE(rank_score, score_total, 5.0)) as avg_score "
             "FROM jokes GROUP BY content_type"
         ).fetchall()
     return {
@@ -34,7 +34,7 @@ def ucb1_select_content_type(
 
     UCB1 公式：score(i) = avg_reward(i) + C * sqrt(ln(total_plays) / plays(i))
     其中：
-      avg_reward(i) = 该类型的历史平均 weighted_total（归一化到 0-1：除以 10）
+      avg_reward(i) = 该类型的历史平均训练奖励（优先 rank_score，回退 score_total，归一化到 0-1：除以 10）
       plays(i)      = 该类型的历史生成次数
       total_plays   = 所有类型的总生成次数
       C             = exploration_weight
@@ -43,8 +43,8 @@ def ucb1_select_content_type(
       - 如果某类型从未生成过（plays=0），优先选择这类型（保证每种类型至少尝试一次）
       - 如果多个类型都未生成过，按 ContentType 枚举顺序选第一个
 
-    从 DB 的 jokes 表取数据：按 content_type GROUP BY，取 COUNT 和 AVG(score_total)。
-    score_total 为 NULL 的记录视为 avg_reward=0.5（中性）。
+    从 DB 的 jokes 表取数据：按 content_type GROUP BY，取 COUNT 和 AVG(COALESCE(rank_score, score_total))。
+    rank_score / score_total 都为 NULL 的记录视为 avg_reward=0.5（中性）。
 
     返回选中的 ContentType。
     """

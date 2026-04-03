@@ -1,4 +1,5 @@
 import type { Score } from '../api/endpoints'
+import { getDisplayBand, getDisplayReason, getDisplayScore } from '../api/judgeView'
 
 const dimensions: Array<{ key: keyof Score; label: string }> = [
   { key: 'structure', label: '结构张力 / Structure' },
@@ -17,6 +18,11 @@ export default function ScoreBars({ score }: { score: Score | null }) {
       </div>
     )
   }
+
+  const displayScore = getDisplayScore(score)
+  const displayBand = getDisplayBand(score)
+  const displayReason = getDisplayReason(score)
+  const showDiagnosticScore = Math.abs(displayScore - score.weighted_total) > 0.05
 
   return (
     <div className="flex flex-col gap-8 rounded-xl border border-black/5 bg-surface-container-lowest p-8 lg:flex-row">
@@ -38,16 +44,50 @@ export default function ScoreBars({ score }: { score: Score | null }) {
         })}
       </div>
       <div className="border-l border-black/5 pl-0 lg:w-[180px] lg:pl-12">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-          综合质量评分
-        </div>
+        <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400">展示分 / Display Track</div>
         <div className="mt-2 flex items-end gap-1">
           <span className="font-headline text-6xl font-black tracking-tighter text-black">
-            {score.weighted_total.toFixed(1)}
+            {displayScore.toFixed(1)}
           </span>
           <span className="pb-2 text-sm font-bold text-gray-300">/ 10</span>
         </div>
-        <p className="mt-4 text-sm leading-relaxed text-outline">{score.reasoning}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {displayBand ? (
+            <span className="rounded-full border border-black/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-outline">
+              {displayBand}
+            </span>
+          ) : null}
+          {score.judge_shape ? (
+            <span className="rounded-full border border-black/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-outline">
+              {score.judge_shape}
+            </span>
+          ) : null}
+          {score.judge_subtype ? (
+            <span className="rounded-full border border-black/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-outline">
+              {score.judge_subtype}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-4 text-sm leading-relaxed text-outline">{displayReason}</p>
+        {score.judge_shape === 'long' && (score.structure_summary || score.best_moment || score.weakest_moment) ? (
+          <div className="mt-5 space-y-3 rounded-xl border border-black/5 bg-white p-4">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400">长内容结构预分析</div>
+            {score.structure_summary ? (
+              <p className="text-sm leading-relaxed text-outline">{score.structure_summary}</p>
+            ) : null}
+            {score.best_moment ? (
+              <p className="text-xs leading-relaxed text-gray-500">最强点：{score.best_moment}</p>
+            ) : null}
+            {score.weakest_moment ? (
+              <p className="text-xs leading-relaxed text-gray-500">最弱点：{score.weakest_moment}</p>
+            ) : null}
+          </div>
+        ) : null}
+        {showDiagnosticScore ? (
+          <p className="mt-4 text-[11px] font-medium text-gray-400">
+            诊断分 {score.weighted_total.toFixed(1)}，用于 calibration 和维度解释，不是训练主奖励。
+          </p>
+        ) : null}
       </div>
     </div>
   )
