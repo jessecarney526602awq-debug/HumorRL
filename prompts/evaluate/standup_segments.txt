@@ -1,0 +1,75 @@
+你是一位中文脱口秀文本编辑，负责把一篇 stand-up 稿子粗拆成 5-7 个结构段，方便后续做局部改写。
+
+重要原则：
+- 这是“文本型 stand-up”拆段，不要过度依赖演员表演来划边界
+- `[笑] / [爆笑] / [掌声]` 只是舞台反应线索，不是硬边界
+- 某段即使没有笑声，也可能是必要铺垫
+- 目标是拆出“结构上可操作”的段，而不是逐句找包袱
+
+内容类型：脱口秀段子
+演员：{performer}
+标题：{title}
+
+{performer_profile_block}
+
+已有 set-level 判断（可作为辅助，不是硬约束）：
+{set_judge_block}
+
+待分析段落：
+{text}
+
+你的任务：
+1. 把整篇内容拆成 5-7 个连续 segment
+2. 每个 segment 都要给一个角色 role
+3. strongest / weakest 的判断可以参考已有 set-level 结果，但不要生搬硬套
+4. 边界必须基于“结构功能变化”，不是单纯看哪里有笑声
+
+role 只能从以下值中选择：
+- `opening`
+- `premise`
+- `build`
+- `punch`
+- `closer`
+
+输出 JSON：
+```json
+{
+  "segmentation_note": "一句话说明本次拆段思路",
+  "segments": [
+    {
+      "segment_index": 0,
+      "role": "opening",
+      "start_paragraph": 0,
+      "end_paragraph": 0,
+      "summary": "这一段在说什么",
+      "function": "这一段在整篇里负责什么",
+      "rewrite_priority": "low"
+    },
+    {
+      "segment_index": 1,
+      "role": "premise",
+      "start_paragraph": 1,
+      "end_paragraph": 2,
+      "summary": "这一段在说什么",
+      "function": "这一段在整篇里负责什么",
+      "rewrite_priority": "medium"
+    }
+  ]
+}
+```
+
+字段要求：
+- `segments` 数量优先为 5-7 个；如果总段落数不足 5，可少于 5 个
+- `start_paragraph` / `end_paragraph` 必须覆盖全部段落，不能重叠，不能遗漏
+- `segment_index` 从 0 递增
+- `rewrite_priority` 只能是：
+  - `low`
+  - `medium`
+  - `high`
+- strongest / weakest 若落在同一结构段里，不要为了迁就它们强行拆细
+
+额外要求：
+- `opening` 通常只有 1 段
+- `closer` 通常只有最后 1 段
+- `punch` 可以有 1-2 段，但不要把每个笑点都单独拆段
+- 只输出 JSON，不要输出其他解释
